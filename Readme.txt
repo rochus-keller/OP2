@@ -6,5 +6,5 @@ All files in the archive have a modification date of 2003-01-05
 
 Changes
 - Translated to utf-8 from native oberon format using ObxIDE
-
+- Added stub modules to accommodate all references
 
