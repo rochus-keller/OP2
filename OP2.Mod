@@ -13,6 +13,7 @@ MODULE OP2;
  BEGIN
   Out.String("Oberon Portable Compiler / nw, rc, nm, tk, prk"); Out.Ln;
   Out.String(OPP.SignOnMessage); Out.Ln; 
+  Out.String("C99 version by me@rochus-keller.ch"); Out.Ln;
  END SignOn;
  
  PROCEDURE ParseOptions(VAR name, options, path, pref, extension: ARRAY OF CHAR;  VAR codeOpt, parserOpt: SET);
