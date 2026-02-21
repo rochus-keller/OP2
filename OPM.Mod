@@ -59,8 +59,7 @@ MODULE OPM; (** non-portable *)
   MaxHaltNr* = MAX(LONGINT);
 
   (* inclusive range of register number of procedures SYSTEM.GETREG and SYSTEM.PUTREG: *)
-  MinRegNr* = 0; (* interpretation is left to the back-end, e.g. for i386: *)
-  MaxRegNr* = 31; (* F0-F7 if second parameter is REAL or LONGREAL, R0-R7 else *)
+  (* MinRegNr and MaxRegNr moved to OPTR (target module) *)
   
   (* maximal value of flag used to mark interface structures: *)
   MaxSysFlag* = 0; (* i386: only 0 is valid, not used *)

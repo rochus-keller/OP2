@@ -10,6 +10,8 @@ Changes
 - Removed Compiler.Mod and unnecessary system stubs, added OP2.Mod as stand-alone replacement
 - Changed OPM so that error messages are in the module instead of loading from OP2.Errors
 - Changed OPA so that it can parse source files with Unix endings too
+- Refactored OPT, OPM and OPB, so that i386 no longer leaks into frontend, abstracted away into new OPTR
+- Refactored OPC to reduce i386 dependencies; IR defs in new OPIR; remaining OPL deps in consideration
 
 
 The .Mod files can be transpiled to C99 files using the AoCodeNavigator; these files are

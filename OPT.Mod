@@ -5,7 +5,7 @@ Refer to the license.txt file provided with this distribution. *)
 (* NW, RC, tk, prk *)
 
 MODULE OPT; (* non-portable *)
- IMPORT SYSTEM, OPS, OPM, Files;
+ IMPORT SYSTEM, OPS, OPM, OPTR, Files;
 
  CONST
   TraceFP = FALSE;
@@ -1413,20 +1413,7 @@ BEGIN
  EnterTypAlias("PTR",  ptrtyp);
 
  universe := topScope^.right; topScope^.right := syslink;  (*add to SYSTEM*)
- EnterIntConst("EAX", 8); EnterIntConst("ECX", 9);
- EnterIntConst("EDX", 10); EnterIntConst("EBX", 11);
- EnterIntConst("ESP", 12); EnterIntConst("EBP", 13);
- EnterIntConst("ESI", 14); EnterIntConst("EDI", 15);
-
- EnterIntConst("AX", 16); EnterIntConst("CX", 17);
- EnterIntConst("DX", 18); EnterIntConst("BX", 19);
- EnterIntConst("SP", 20); EnterIntConst("BP", 21);
- EnterIntConst("SI", 22); EnterIntConst("DI", 23);
-
- EnterIntConst("AL", 24); EnterIntConst("CL", 25);
- EnterIntConst("DL", 26); EnterIntConst("BL", 27);
- EnterIntConst("AH", 28); EnterIntConst("CH", 29);
- EnterIntConst("DH", 30); EnterIntConst("BH", 31);
+ OPTR.EnterRegisters(EnterIntConst); (* target-specific register names *)
  topScope^.right := universe; universe := topScope;
  
  EnterProc("HALT", haltfn); EnterProc("NEW", newfn);
