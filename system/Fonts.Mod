@@ -1,6 +1,6 @@
 MODULE Fonts;
 
 TYPE
-    Font* = RECORD END;
+    Font* = POINTER TO RECORD END;
     
 END Fonts.

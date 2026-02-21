@@ -7,4 +7,6 @@ All files in the archive have a modification date of 2003-01-05
 Changes
 - Translated to utf-8 from native oberon format using ObxIDE
 - Added stub modules to accommodate all references
+- Removed Compiler.Mod and unnecessary system stubs, added OP2.Mod as stand-alone replacement
+- Changed OPM so that error messages are in the module instead of loading from OP2.Errors
 
