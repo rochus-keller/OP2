@@ -3188,6 +3188,7 @@ ASSERT(~loaded(instr.dest));
   END FindNewMths;
 
  BEGIN (*  OutCode *)
+  modMap[0] := 0;
   linkCorrection := 0; i := 0;
   WHILE i < nofLinks DO
    IF (link[i].offset = Nil) OR (link[i].mod > 0) THEN INC (linkCorrection) END;
