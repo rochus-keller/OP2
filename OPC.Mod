@@ -6,7 +6,7 @@ Refer to the license.txt file provided with this distribution. *)
 
 
 MODULE OPC; (** non-portable *)
- IMPORT OPT, OPL, OPO, OPM, SYSTEM;
+ IMPORT OPT, OPIR, OPL, OPM, SYSTEM;
 
 
  CONST
@@ -27,8 +27,8 @@ MODULE OPC; (** non-portable *)
   (* item base modes (=object modes) *)
   Var = 1; VarPar = 2; Con = 3; Fld = 4; Typ = 5; LProc = 6; XProc = 7; CProc = 9; IProc = 10; TProc = 13;
   
-  (* item modes for Intel i386 (must not overlap item basemodes,  > 13) *)
-  Reg = OPO.Reg; Abs = OPO.Abs; RegRel = OPO.RegRel; Coc = OPO.Coc;
+  (* item modes (must not overlap item basemodes, > 13) *)
+  Reg = OPIR.Reg; Abs = OPIR.Abs; RegRel = OPIR.RegRel; Coc = OPIR.Coc;
 
   (*SYSTEM ops*)
   adr = 24; cc = 25; bit = 26; lsh = 27; rot = 28; val = 29;
@@ -62,54 +62,54 @@ MODULE OPC; (** non-portable *)
   false = 0; true = 1; nil = 0;
 
   (* conditions: the same as opcodes je, jne,....  *)
-  EQ = OPL.je; NE = OPL.jne; LT = OPL.jl; LE = OPL.jle; GT = OPL.jg; GE = OPL.jge; 
-  AB = OPL.ja; AE = OPL.jae; BL = OPL.jb; BE = OPL.jbe;
-  CS = OPL.jc; CC = OPL.jnc; always = OPL.jmp; never = -1;
+  EQ = OPIR.je; NE = OPIR.jne; LT = OPIR.jl; LE = OPIR.jle; GT = OPIR.jg; GE = OPIR.jge; 
+  AB = OPIR.ja; AE = OPIR.jae; BL = OPIR.jb; BE = OPIR.jbe;
+  CS = OPIR.jc; CC = OPIR.jnc; always = OPIR.jmp; never = -1;
 
  (* opcode of pseudo RISC processor *)
  (* integer operations *)
- ld = OPL.ld;  store = OPL.store;  lea = OPL.lea;  push = OPL.push; 
- pop = OPL.pop;  ldProc = OPL.ldProc; ldXProc = OPL.ldXProc; ldbdw = OPL.ldbdw; 
- ldwdw = OPL.ldwdw;  ldbw = OPL.ldbw; (* sign extended load; b: byte; w: word; dw: dword *)
- ldbdwu = OPL.ldbdwu; ldwdwu = OPL.ldwdwu; ldbwu = OPL.ldbwu; (* zero extended load *)
- putReg = OPL.putReg; getReg = OPL.getReg;
- add = OPL.add;  sub = OPL.sub;  mul = OPL.mul;  div = OPL.div; 
- mod = OPL.mod ;  neg = OPL.neg;  abs = OPL.abs; cmp = OPL.cmp; 
- je = OPL.je;  jne = OPL.jne;  jl = OPL.jl;  jle = OPL.jle; 
- jg = OPL.jg;  jge = OPL.jge; ja = OPL.ja;  jae = OPL.jae; 
- jb = OPL.jb;  jbe = OPL.jbe; jc = OPL.jc;  jnc = OPL.jnc; 
- jmp = OPL.jmp;  jmpReg = OPL.jmpReg; sete = OPL.sete;  setne = OPL.setne; 
- setl = OPL.setl;  setle = OPL.setle;  setg = OPL.setg;  setge = OPL.setge;
- seta = OPL.seta;  setae = OPL.setae;  setb = OPL.setb;  setbe = OPL.setbe;
- setc = OPL.setc;  setnc = OPL.setnc; te = OPL.te;  tne = OPL.tne; 
- tle = OPL.tle; ta = OPL.ta;  tae = OPL.tae; to =  OPL.to;
- trap = OPL.trap; or = OPL.or;  xor = OPL.xor; 
- and = OPL.and;  not = OPL.not; bt = OPL.bt;  btr = OPL.btr;  test = OPL.test;
- bts = OPL.bts; call = OPL.call;  callReg = OPL.callReg;  xcall = OPL.xcall; 
- ret = OPL.ret;  enter = OPL.enter;  leave = OPL.leave; sal = OPL.sal; 
- sar = OPL.sar ;  shr = OPL.shr;  rol = OPL.rol; cld = OPL.cld; 
- repMovs = OPL.repMovs;  cmpString = OPL.cmpString;
- cli = OPL.cli; sti = OPL.sti; in = OPL.in; out = OPL.out;
- assembler = OPL.assembler;
- clear = OPL.clear;
- std = OPL.std;
+ ld = OPIR.ld;  store = OPIR.store;  lea = OPIR.lea;  push = OPIR.push; 
+ pop = OPIR.pop;  ldProc = OPIR.ldProc; ldXProc = OPIR.ldXProc; ldbdw = OPIR.ldbdw; 
+ ldwdw = OPIR.ldwdw;  ldbw = OPIR.ldbw; (* sign extended load; b: byte; w: word; dw: dword *)
+ ldbdwu = OPIR.ldbdwu; ldwdwu = OPIR.ldwdwu; ldbwu = OPIR.ldbwu; (* zero extended load *)
+ putReg = OPIR.putReg; getReg = OPIR.getReg;
+ add = OPIR.add;  sub = OPIR.sub;  mul = OPIR.mul;  div = OPIR.div; 
+ mod = OPIR.mod ;  neg = OPIR.neg;  abs = OPIR.abs; cmp = OPIR.cmp; 
+ je = OPIR.je;  jne = OPIR.jne;  jl = OPIR.jl;  jle = OPIR.jle; 
+ jg = OPIR.jg;  jge = OPIR.jge; ja = OPIR.ja;  jae = OPIR.jae; 
+ jb = OPIR.jb;  jbe = OPIR.jbe; jc = OPIR.jc;  jnc = OPIR.jnc; 
+ jmp = OPIR.jmp;  jmpReg = OPIR.jmpReg; sete = OPIR.sete;  setne = OPIR.setne; 
+ setl = OPIR.setl;  setle = OPIR.setle;  setg = OPIR.setg;  setge = OPIR.setge;
+ seta = OPIR.seta;  setae = OPIR.setae;  setb = OPIR.setb;  setbe = OPIR.setbe;
+ setc = OPIR.setc;  setnc = OPIR.setnc; te = OPIR.te;  tne = OPIR.tne; 
+ tle = OPIR.tle; ta = OPIR.ta;  tae = OPIR.tae; to =  OPIR.to;
+ trap = OPIR.trap; or = OPIR.or;  xor = OPIR.xor; 
+ and = OPIR.and;  not = OPIR.not; bt = OPIR.bt;  btr = OPIR.btr;  test = OPIR.test;
+ bts = OPIR.bts; call = OPIR.call;  callReg = OPIR.callReg;  xcall = OPIR.xcall; 
+ ret = OPIR.ret;  enter = OPIR.enter;  leave = OPIR.leave; sal = OPIR.sal; 
+ sar = OPIR.sar ;  shr = OPIR.shr;  rol = OPIR.rol; cld = OPIR.cld; 
+ repMovs = OPIR.repMovs;  cmpString = OPIR.cmpString;
+ cli = OPIR.cli; sti = OPIR.sti; in = OPIR.in; out = OPIR.out;
+ assembler = OPIR.assembler;
+ clear = OPIR.clear;
+ std = OPIR.std;
 
  (* floating point operations *)
- fload = OPL.fload;  fstore = OPL.fstore;  fist = OPL.fist;  fild = OPL.fild;
- fadd = OPL.fadd;  fsub = OPL.fsub;  fmul = OPL.fmul; fdiv = OPL.fdiv; 
- fabs = OPL.fabs;  fchs = OPL.fchs;  fcmp = OPL.fcmp;
+ fload = OPIR.fload;  fstore = OPIR.fstore;  fist = OPIR.fist;  fild = OPIR.fild;
+ fadd = OPIR.fadd;  fsub = OPIR.fsub;  fmul = OPIR.fmul; fdiv = OPIR.fdiv; 
+ fabs = OPIR.fabs;  fchs = OPIR.fchs;  fcmp = OPIR.fcmp;
 
  (* special *)
- phi = OPL.phi;  pushReg = OPL.pushReg; popReg = OPL.popReg;  case = OPL.case;
- entier = OPL.entier; short = OPL.short; label = OPL.label;
+ phi = OPIR.phi;  pushReg = OPIR.pushReg; popReg = OPIR.popReg;  case = OPIR.case;
+ entier = OPIR.entier; short = OPIR.short; label = OPIR.label;
 
- newStat = OPL.newStat;
+ newStat = OPIR.newStat;
 
  (* predefined registers of the pseudo RISC machine *)
- ESP = OPL.RiscESP; FP = OPL.RiscFP; none = OPL.none;
+ SP = OPIR.SP; FP = OPIR.FP; none = OPIR.none;
  
  (* scale factor *)
- noScale = OPO.noScale;
+ noScale = OPIR.noScale;
  
  (* sysflag *) (* ejz *)
  notag = 1; stdcall = 2; cdecl = 3; delegate = 5;
@@ -194,30 +194,30 @@ Intel i386 :
  PROCEDURE IncReg (pReg: LONGINT);
  (* increments field used in the pseudo code where reg was first used *)
  BEGIN
-  IF pReg >= 0 THEN INC (OPL.Instr[pReg].used) END (* pReg < 0: special registers  *)
+  IF pReg >= 0 THEN INC (OPIR.Instr[pReg].used) END (* pReg < 0: special registers  *)
  END IncReg;
  
  PROCEDURE InitInstr (op: INTEGER; mode, form: SHORTINT; node: OPT.Node);
  (* initialize the pseudo instruction at position pc *)
- VAR i: LONGINT;  instr: OPL.InstructionTable;
+ VAR i: LONGINT;  instr: OPIR.InstructionTable;
  BEGIN
-  IF pc >= LEN(OPL.Instr) THEN
-   NEW(instr, LEN(OPL.Instr)*2);
-   FOR i := 0 TO LEN(OPL.Instr)-1 DO instr[i] := OPL.Instr[i] END;
-   OPL.Instr := instr
+  IF pc >= LEN(OPIR.Instr) THEN
+   NEW(instr, LEN(OPIR.Instr)*2);
+   FOR i := 0 TO LEN(OPIR.Instr)-1 DO instr[i] := OPIR.Instr[i] END;
+   OPIR.Instr := instr
   END;
   ASSERT ((mode >= 0) & (mode <= 3));
   ASSERT ((op MOD 32 = 0) & (op > 0));
-  OPL.Instr [pc].op := op + formTab[form] + mode * 8; OPL.Instr [pc].node := node;
-  OPL.Instr [pc].src1 := none; OPL.Instr [pc].src2 := none; OPL.Instr [pc].inx := none;
-  OPL.Instr [pc].dest := pc; OPL.Instr [pc].used := 0; OPL.Instr [pc].hint := OPL.noHint;
-  OPL.Instr [pc].pc := OPL.Nil; OPL.Instr [pc].reg := OPL.Nil; OPL.Instr [pc].abs := FALSE
+  OPIR.Instr [pc].op := op + formTab[form] + mode * 8; OPIR.Instr [pc].node := node;
+  OPIR.Instr [pc].src1 := none; OPIR.Instr [pc].src2 := none; OPIR.Instr [pc].inx := none;
+  OPIR.Instr [pc].dest := pc; OPIR.Instr [pc].used := 0; OPIR.Instr [pc].hint := OPIR.noHint;
+  OPIR.Instr [pc].pc := OPIR.Nil; OPIR.Instr [pc].reg := OPIR.Nil; OPIR.Instr [pc].abs := FALSE
  END InitInstr;
 
  PROCEDURE NewStat* (textPos: LONGINT);
  BEGIN
   InitInstr (newStat, 0, 0, NIL);
-  OPL.Instr [pc].src1 := textPos;
+  OPIR.Instr [pc].src1 := textPos;
   OPM.errpos := textPos;
   INC (pc)
  END NewStat;
@@ -227,30 +227,30 @@ Intel i386 :
  BEGIN
   CASE x.mode OF
    Abs:
-    InitInstr (op, OPO.MemReg, x.typ.form, x.node);
-    OPL.Instr[pc].src2 := x.adr; OPL.Instr[pc].inx := x.inx; 
-    OPL.Instr[pc].scale := x.scale; OPL.Instr[pc].src1 := none;
+    InitInstr (op, OPIR.MemReg, x.typ.form, x.node);
+    OPIR.Instr[pc].src2 := x.adr; OPIR.Instr[pc].inx := x.inx; 
+    OPIR.Instr[pc].scale := x.scale; OPIR.Instr[pc].src1 := none;
     IncReg (x.inx)
     | Var:
     ASSERT (x.mnolev > 0);
-    InitInstr (op, OPO.MemReg, x.typ.form, x.node);
-    OPL.Instr[pc].src2 := x.adr; OPL.Instr[pc].inx := none;
-    OPL.Instr[pc].scale := x.scale;
-    OPL.Instr[pc].src1 := FP
+    InitInstr (op, OPIR.MemReg, x.typ.form, x.node);
+    OPIR.Instr[pc].src2 := x.adr; OPIR.Instr[pc].inx := none;
+    OPIR.Instr[pc].scale := x.scale;
+    OPIR.Instr[pc].src1 := FP
     | Con:
     ASSERT ( (op # lea) & (op # fload) & (op # fild) & (op # pop) );
     ASSERT ( (op < ldbdw) OR (op > ldbwu) ); 
-    InitInstr (op, OPO.ImmReg, x.typ.form, x.node);
-    OPL.Instr[pc].src2 := x.adr
+    InitInstr (op, OPIR.ImmReg, x.typ.form, x.node);
+    OPIR.Instr[pc].src2 := x.adr
     | Reg:
     ASSERT ((op # lea) & (op # fild));
-    InitInstr (op, OPO.RegReg, x.typ.form, x.node);
-    OPL.Instr[pc].src1 := x.adr;
+    InitInstr (op, OPIR.RegReg, x.typ.form, x.node);
+    OPIR.Instr[pc].src1 := x.adr;
     IF op # pop THEN IncReg (x.adr) END
     | RegRel:
-    InitInstr (op, OPO.MemReg, x.typ.form, x.node);
-    OPL.Instr[pc].src1 := x.adr; OPL.Instr[pc].src2 := x.offs; OPL.Instr[pc].inx := x.inx;
-    OPL.Instr[pc].scale := x.scale;
+    InitInstr (op, OPIR.MemReg, x.typ.form, x.node);
+    OPIR.Instr[pc].src1 := x.adr; OPIR.Instr[pc].src2 := x.offs; OPIR.Instr[pc].inx := x.inx;
+    OPIR.Instr[pc].scale := x.scale;
     IncReg (x.adr); IncReg (x.inx)
     | Coc:
     MoveCoc (z, x); RETURN (* don't change pc and z.adr *)
@@ -282,9 +282,9 @@ Intel i386 :
  PROCEDURE GenLoadProc (op: INTEGER; VAR z: Item; val: LONGINT; node: OPT.Node);
  (* ldProc, ldXProc *)
  BEGIN
-  InitInstr (op, OPO.ImmReg, LInt, node);
+  InitInstr (op, OPIR.ImmReg, LInt, node);
   z.mode := Reg; z.typ := OPT.ptrtyp; z.adr := pc; 
-  OPL.Instr [pc].src1 := val;
+  OPIR.Instr [pc].src1 := val;
   INC (pc)
  END GenLoadProc;
  
@@ -294,19 +294,19 @@ Intel i386 :
   ASSERT (x.mode = Reg);
   CASE z.mode OF
    Abs:
-    InitInstr (op, OPO.RegMem, z.typ.form, z.node); OPL.Instr[pc].dest := x.adr;
-    OPL.Instr[pc].src2 := z.adr; OPL.Instr[pc].inx := z.inx; OPL.Instr[pc].scale := z.scale;
-    OPL.Instr[pc].src1 := none;
+    InitInstr (op, OPIR.RegMem, z.typ.form, z.node); OPIR.Instr[pc].dest := x.adr;
+    OPIR.Instr[pc].src2 := z.adr; OPIR.Instr[pc].inx := z.inx; OPIR.Instr[pc].scale := z.scale;
+    OPIR.Instr[pc].src1 := none;
     IncReg (z.inx)
     | Var:
     ASSERT (z.mnolev > 0);
-    InitInstr (op, OPO.RegMem, z.typ.form, z.node); OPL.Instr[pc].dest := x.adr;
-    OPL.Instr[pc].src2 := z.adr; OPL.Instr[pc].inx := none;
-    OPL.Instr[pc].src1 := FP
+    InitInstr (op, OPIR.RegMem, z.typ.form, z.node); OPIR.Instr[pc].dest := x.adr;
+    OPIR.Instr[pc].src2 := z.adr; OPIR.Instr[pc].inx := none;
+    OPIR.Instr[pc].src1 := FP
     | RegRel:
-    InitInstr (op, OPO.RegMem, z.typ.form, z.node); OPL.Instr[pc].dest := x.adr;
-    OPL.Instr[pc].src1 := z.adr; OPL.Instr[pc].src2 := z.offs; OPL.Instr[pc].inx := z.inx;
-    OPL.Instr[pc].scale := z.scale;
+    InitInstr (op, OPIR.RegMem, z.typ.form, z.node); OPIR.Instr[pc].dest := x.adr;
+    OPIR.Instr[pc].src1 := z.adr; OPIR.Instr[pc].src2 := z.offs; OPIR.Instr[pc].inx := z.inx;
+    OPIR.Instr[pc].scale := z.scale;
     IncReg (z.adr); IncReg (z.inx)
   ELSE HALT (BUG)
   END;
@@ -317,10 +317,10 @@ Intel i386 :
  PROCEDURE GenPopReg (hint, form: SHORTINT); 
  (* popReg *)
  BEGIN
-  IF hint = OPL.noHint THEN InitInstr (popReg, 0, 0, NIL)
+  IF hint = OPIR.noHint THEN InitInstr (popReg, 0, 0, NIL)
   ELSE
-   InitInstr (popReg, OPO.RegReg, form, NIL);
-   OPL.Instr [pc].hint := hint;
+   InitInstr (popReg, OPIR.RegReg, form, NIL);
+   OPIR.Instr [pc].hint := hint;
   END;
   INC (pc)
  END GenPopReg;
@@ -336,10 +336,10 @@ Intel i386 :
  (* used for: je, jne, jl, jle, jg, jge, ja, jae, jb, jbe, jc, jnc, jmp, jmpReg, trap, te, tne, ta, tae, to, ret, enter, leave *)
  BEGIN
   IF op = jmpReg THEN 
-   InitInstr (op, OPO.RegReg, LInt, node); IncReg (adr)
+   InitInstr (op, OPIR.RegReg, LInt, node); IncReg (adr)
   ELSE InitInstr (op, 0, 0, node)
   END;
-  OPL.Instr[pc].src2 := adr;
+  OPIR.Instr[pc].src2 := adr;
   INC (pc)
  END Gen1;
 
@@ -347,8 +347,8 @@ Intel i386 :
  (* z := op (x); used for: neg, not, abs, fabs, fchs, short, entier *)
  BEGIN
   ASSERT (x.mode = Reg);
-  InitInstr (op, OPO.RegReg, x.typ.form, x.node);
-  OPL.Instr[pc].src1 := x.adr;
+  InitInstr (op, OPIR.RegReg, x.typ.form, x.node);
+  OPIR.Instr[pc].src1 := x.adr;
   IncReg (x.adr);
   z.adr := pc; z.mode := Reg;
   INC (pc)
@@ -357,15 +357,15 @@ Intel i386 :
  PROCEDURE Gen3 (op: INTEGER; VAR z, x, y: Item);
  (* z := op (x, y); used for: add, sub, mul, div, mod, or, xor, and, btr, bts, sal,sar, shr, rol, fadd, fsub, fmul, fdiv *)
  BEGIN
-  IF y.mode = Con THEN InitInstr (op, OPO.ImmReg, x.typ.form, x.node)
+  IF y.mode = Con THEN InitInstr (op, OPIR.ImmReg, x.typ.form, x.node)
   ELSE 
-   InitInstr (op, OPO.RegReg, x.typ.form, x.node); IncReg (y.adr)
+   InitInstr (op, OPIR.RegReg, x.typ.form, x.node); IncReg (y.adr)
   END;
-  OPL.Instr[pc].src1 := x.adr; OPL.Instr[pc].src2 := y.adr;
+  OPIR.Instr[pc].src1 := x.adr; OPIR.Instr[pc].src2 := y.adr;
   IncReg (x.adr);
-  IF (op = div) OR (op = mod) THEN OPL.Instr[x.adr].hint := OPL.tryEAX
-  ELSIF (op >= sal) & (op <= rol) & (y.mode # Con) THEN OPL.Instr[y.adr].hint := OPL.useECX
-  ELSIF (op = mul) & (x.typ.form = SInt) THEN OPL.Instr [x.adr].hint := OPL.tryEAX
+  IF (op = div) OR (op = mod) THEN OPIR.Instr[x.adr].hint := OPIR.tryReg0
+  ELSIF (op >= sal) & (op <= rol) & (y.mode # Con) THEN OPIR.Instr[y.adr].hint := OPIR.useReg1
+  ELSIF (op = mul) & (x.typ.form = SInt) THEN OPIR.Instr [x.adr].hint := OPIR.tryReg0
   END;
   z.adr := pc; z.mode := Reg;
   INC (pc)
@@ -381,11 +381,11 @@ Intel i386 :
  (* used for call, xcall, callReg *)
  BEGIN
   IF op = callReg THEN
-   InitInstr (op, OPO.RegReg, LInt, node); IncReg (adr)
+   InitInstr (op, OPIR.RegReg, LInt, node); IncReg (adr)
   ELSE
    InitInstr (op, 0, 0, node)
   END;
-  OPL.Instr [pc].src1 := parSize; OPL.Instr[pc].src2 := adr;
+  OPIR.Instr [pc].src1 := parSize; OPIR.Instr[pc].src2 := adr;
   INC (pc)
  END GenCall;
  
@@ -393,11 +393,11 @@ Intel i386 :
  (* x op y; used for: cmp, bt, fcmp, cmpString *)
  BEGIN
   ASSERT((x.mode=Reg)&(y.mode IN {Reg, Con}), 100);
-  IF y.mode = Con THEN InitInstr (op, OPO.ImmReg, x.typ.form, x.node)
+  IF y.mode = Con THEN InitInstr (op, OPIR.ImmReg, x.typ.form, x.node)
   ELSE
-   InitInstr (op, OPO.RegReg, x.typ.form, x.node); IncReg (y.adr)
+   InitInstr (op, OPIR.RegReg, x.typ.form, x.node); IncReg (y.adr)
   END;
-  OPL.Instr[pc].src1 := x.adr; OPL.Instr[pc].src2 := y.adr;
+  OPIR.Instr[pc].src1 := x.adr; OPIR.Instr[pc].src2 := y.adr;
   IncReg (x.adr);
   INC (pc)
  END GenFlags;
@@ -405,7 +405,7 @@ Intel i386 :
  PROCEDURE GenSetC (op: INTEGER; VAR z: Item); (* set condition *)
  (* used for: sete, setne, setl, setle, setg, setge, seta, setae, setb, setbe, setc, setne *)
  BEGIN
-  InitInstr (op, OPO.RegReg, SInt, z.node);
+  InitInstr (op, OPIR.RegReg, SInt, z.node);
   z.adr := pc; z.mode := Reg;
   INC (pc)
  END GenSetC;
@@ -414,11 +414,11 @@ Intel i386 :
  (* used for: repMovs *)
  BEGIN
   InitInstr (repMovs, 0, 0, NIL);
-  OPL.Instr [pc].dest := z.adr; (* destination address *)
-  OPL.Instr [pc].src1 := x.adr; (* source address *)
-  OPL.Instr [pc].src2 := nofElem.adr; (* nofelements *)
-  OPL.Instr [pc].inx := moveSize; (* move size: 8, 16 or 32 bit *)
-  IF reverse THEN  OPL.Instr[pc].hint := 1  END;
+  OPIR.Instr [pc].dest := z.adr; (* destination address *)
+  OPIR.Instr [pc].src1 := x.adr; (* source address *)
+  OPIR.Instr [pc].src2 := nofElem.adr; (* nofelements *)
+  OPIR.Instr [pc].inx := moveSize; (* move size: 8, 16 or 32 bit *)
+  IF reverse THEN  OPIR.Instr[pc].hint := 1  END;
   INC (pc)
  END GenRepMovs;
  
@@ -426,8 +426,8 @@ Intel i386 :
  (* phi *)
  BEGIN
   InitInstr (phi, 0, 0, NIL);
-  OPL.Instr [pc].src1 := reg0; OPL.Instr [pc].src2 := reg1;
-  OPL.Instr [reg1].hint := SHORT (-1 - reg0);
+  OPIR.Instr [pc].src1 := reg0; OPIR.Instr [pc].src2 := reg1;
+  OPIR.Instr [reg1].hint := SHORT (-1 - reg0);
   INC (pc)
  END GenPhi;
  
@@ -456,8 +456,8 @@ Intel i386 :
   ASSERT ((L < 0) & (val >= 0));
   L := -2 - L;
   WHILE L # Nil DO
-   L1 := -2 - OPL.Instr[L].src2;
-   OPL.Instr[L].src2 := val;
+   L1 := -2 - OPIR.Instr[L].src2;
+   OPIR.Instr[L].src2 := val;
    L := L1
   END
  END FixLinkWith;
@@ -470,8 +470,8 @@ Intel i386 :
   L := -2 - L;
   IF L # Nil THEN
    REPEAT
-    L1 := -2 - OPL.Instr[L].src2;
-    OPL.Instr[L].src2 := pc;
+    L1 := -2 - OPIR.Instr[L].src2;
+    OPIR.Instr[L].src2 := pc;
     L := L1
    UNTIL L = Nil;
    Gen0 (label)
@@ -485,11 +485,11 @@ Intel i386 :
   L2 := -2 - L0;
   IF L2 # Nil THEN
    LOOP 
-    L3 := -2 - OPL.Instr[L2].src2;
+    L3 := -2 - OPIR.Instr[L2].src2;
     IF L3 = Nil THEN EXIT END;
     L2 := L3
    END;
-   OPL.Instr[L2].src2 := L1;
+   OPIR.Instr[L2].src2 := L1;
    RETURN L0
   ELSE 
    RETURN L1
@@ -700,8 +700,8 @@ Intel i386 :
    load (z);
    GetTdAdr (testtyp, testTag); load (testTag);
    GenFlags (cmp, z, testTag);
-   IF equal THEN Gen1 (tne, OPL.EqualGuardTrap, NIL)
-   ELSIF guard THEN Gen1 (tne, OPL.GuardTrap, NIL)
+   IF equal THEN Gen1 (tne, OPIR.EqualGuardTrap, NIL)
+   ELSIF guard THEN Gen1 (tne, OPIR.GuardTrap, NIL)
    ELSE SetCC (x, EQ)
    END
   END
@@ -726,7 +726,7 @@ Intel i386 :
  
  PROCEDURE CheckOverflow (VAR x: Item);
  BEGIN
-  IF (OPM.ovflchk IN OPM.codeOptions) THEN Gen1 (to, OPL.OverflowTrap, NIL) END
+  IF (OPM.ovflchk IN OPM.codeOptions) THEN Gen1 (to, OPIR.OverflowTrap, NIL) END
  END CheckOverflow;
    
  PROCEDURE CheckIntRange (VAR x: Item; form: SHORTINT);
@@ -742,12 +742,12 @@ Intel i386 :
   IF (index.mode=Con)&(len.mode#Con) THEN (*reversed check*)
    IF (len.mode#Reg) THEN load(len) END;
    GenFlags (cmp, len, index);
-   Gen1 (tle, OPL.RangeTrap, NIL)
+   Gen1 (tle, OPIR.RangeTrap, NIL)
   ELSE
    IF (index.mode#Reg) THEN load(index) END;
    IF (len.mode#Con) THEN load(len) END;
    GenFlags (cmp, index, len);
-   Gen1 (tae, OPL.RangeTrap, NIL)
+   Gen1 (tae, OPIR.RangeTrap, NIL)
   END;
  END CheckIndex;
  
@@ -826,7 +826,7 @@ Intel i386 :
    END;
    GenPush (x); (* store x on the stack as a temporary variable *)
    temp.mode := RegRel; temp.typ := OPT.linttyp; 
-   temp.adr := ESP; temp.offs := 0; temp.inx := none; temp.node := NIL;
+   temp.adr := SP; temp.offs := 0; temp.inx := none; temp.node := NIL;
    ChangeType (z, zform);
    ChangeType (temp, zform);
    GenLoad (fild, z, temp);
@@ -1167,7 +1167,7 @@ Intel i386 :
   IF x.typ.form IN intSet THEN
    load (x);
    Gen2 (abs, z, x);
-   IF x.typ.form IN {Int, LInt} THEN OPL.Instr [pc-1].hint := OPL.useEAX END;
+   IF x.typ.form IN {Int, LInt} THEN OPIR.Instr [pc-1].hint := OPIR.useReg0 END;
   ELSE (* x.typ.form IN realSet *)
    loadf (x);
    Gen2 (fabs, z, x)
@@ -1427,13 +1427,13 @@ Intel i386 :
     MakeCon (const, OPT.linttyp, 4);
     IF (xform IN  {Byte, Char, SInt, Int, LInt, Set, Pointer, ProcTyp}) & (typform IN realSet) & (x.mode = Reg) THEN
      (* load (x) *); GenPush (x);
-     t.mode := RegRel; t.adr := ESP; t.offs := 0; t.inx := none; t.typ := OPT.realtyp; t.node := NIL;
+     t.mode := RegRel; t.adr := SP; t.offs := 0; t.inx := none; t.typ := OPT.realtyp; t.node := NIL;
      GenLoad (fload, z, t);
      t := Stack; Gen3 (add, t, t, const)
     ELSIF (xform IN realSet) & (typform IN {Byte, Char, SInt, Int, LInt, Set, Pointer, ProcTyp}) 
       & (x.mode = Reg) THEN
      t := Stack; Gen3 (sub, t, t, const);
-     t.mode := RegRel; t.adr := ESP; t.offs := 0; t.inx := none; t.typ := OPT.realtyp; t.node := NIL;
+     t.mode := RegRel; t.adr := SP; t.offs := 0; t.inx := none; t.typ := OPT.realtyp; t.node := NIL;
      loadf (x);
      GenStore (fstore, t, x);
      t.typ := typ; GenLoad (ld, z, t);
@@ -1530,7 +1530,7 @@ Intel i386 :
   IF form IN realSet THEN loadf (x)
   ELSE load (x)
   END;
-  OPL.Instr [pc-1].abs := constAddr & getfn;   (* if x is the address and a constant, no fixup *) (* GetPut *)
+  OPIR.Instr [pc-1].abs := constAddr & getfn;   (* if x is the address and a constant, no fixup *) (* GetPut *)
   IF z.mode = VarPar THEN
    loadAdr (z); z.mode := RegRel
   ELSE CompleteSL (z)
@@ -1538,7 +1538,7 @@ Intel i386 :
   IF form IN realSet THEN GenStore (fstore, z, x)
   ELSE GenStore (store, z, x)
   END;
-  OPL.Instr [pc-1].abs := constAddr & ~getfn   (* if z is the address and a constant, no fixup *) (* GetPut *)
+  OPIR.Instr [pc-1].abs := constAddr & ~getfn   (* if z is the address and a constant, no fixup *) (* GetPut *)
  END SYSgetput;
 
  PROCEDURE SYSportio* (VAR z, x: Item; pin: BOOLEAN); (* SYSTEM.PORTIN, SYSTEM.PORTOUT *)(* New Functions *)
@@ -1550,11 +1550,11 @@ Intel i386 :
    IF x.mode # Reg THEN 
     load(x);  (* load x into reg *)
    END;
-   OPL.Instr [x.adr].hint := OPL.useEDX; (* let the reg be DX *)
+   OPIR.Instr [x.adr].hint := OPIR.useReg2; (* let the reg be DX *)
    ASSERT((x.mode = 15) & (x.typ = OPT.inttyp));
    x.typ := z.typ;  (* generate correct size *)
    GenLoad(in, reg, x);
-   OPL.Instr [pc-1].hint := OPL.useEAX;
+   OPIR.Instr [pc-1].hint := OPIR.useReg0;
    IF z.mode = VarPar THEN 
     loadAdr(z); z.mode := RegRel  (* generate 0[Reg] where Reg = Address(par) *)
    ELSE CompleteSL(z)
@@ -1563,17 +1563,17 @@ Intel i386 :
   ELSE
    IF z.mode # Reg THEN  load(z)  (* load z into reg *)
    END;
-   OPL.Instr [z.adr].hint := OPL.useEDX;
+   OPIR.Instr [z.adr].hint := OPIR.useReg2;
    ASSERT( z.mode = Reg );
    IF x.mode = VarPar THEN
     loadAdr(x); x.mode := RegRel  (* generate 0[Reg] where Reg = Address(par) *)
    ELSE CompleteSL(x)
    END;
    IF x.mode # Reg THEN GenLoad(ld, x, x) END;
-   OPL.Instr [x.adr].hint := OPL.useEAX;
+   OPIR.Instr [x.adr].hint := OPIR.useReg0;
    ASSERT( x.mode = Reg ); 
    GenLoad(out, reg, x);
-   OPL.Instr [pc-1].dest := z.adr
+   OPIR.Instr [pc-1].dest := z.adr
   END;
  END SYSportio;
 
@@ -1598,7 +1598,7 @@ Intel i386 :
    ELSE CompleteSL (z)
    END;
    GenStore (getReg, z, reg);
-   OPL.Instr [pc-1].hint := OPL.useEAX + x.adr
+   OPIR.Instr [pc-1].hint := OPIR.useReg0 + x.adr
   ELSE (* putrrn *)
    IF x.typ = OPT.realtyp THEN x.typ := OPT.linttyp END;  (*real, move 32-bit*)
    IF x.mode = Con THEN x.typ := OPT.linttyp
@@ -1607,7 +1607,7 @@ Intel i386 :
    ELSE CompleteSL (x)
    END;
    GenLoad (putReg, reg, x);
-   OPL.Instr [pc-1].hint := OPL.useEAX + z.adr
+   OPIR.Instr [pc-1].hint := OPIR.useReg0 + z.adr
   END
  END SYSgetputReg;
 
@@ -1644,7 +1644,7 @@ Intel i386 :
   x.typ := OPT.ptrtyp;
   loadAdr(x); reg := x.adr;
   x.mode := RegRel; x.offs := -4; load(x); (*get the td*)
-  OPL.Instr[pc-1].hint := OPL.useEBX; (*avoid overwriting reg*)
+  OPIR.Instr[pc-1].hint := OPIR.useReg3; (*avoid overwriting reg*)
   x.mode := RegRel; x.offs := MethodOffs - 4 * (obj.adr DIV 10000H); load(x); (*get the method*)
   x.descReg := reg;
   x.typ := delegateType;
@@ -1728,11 +1728,11 @@ Intel i386 :
   END;
   (*base type has a fixed size*)
   IF typ.size MOD 4 = 0 THEN
-   scale := OPO.Scale4; step := OPO.Bit32;  rest := typ.size DIV 4
+   scale := OPIR.Scale4; step := OPIR.Bit32;  rest := typ.size DIV 4
   ELSIF typ.size MOD 2 = 0 THEN
-   scale := OPO.Scale2; step := OPO.Bit16;  rest := typ.size DIV 2
+   scale := OPIR.Scale2; step := OPIR.Bit16;  rest := typ.size DIV 2
   ELSE
-   scale := OPO.Scale1; step := OPO.Bit8;  rest := typ.size
+   scale := OPIR.Scale1; step := OPIR.Bit8;  rest := typ.size
   END;
   IF rest#0 THEN
    IF size.mode=Con THEN  size.adr:=size.adr*rest
@@ -1816,7 +1816,7 @@ Intel i386 :
      loadAdr(z); z.mode := RegRel; z.offs := 0; z.inx := index.adr; z.scale := SHORT(SHORT(scale))
     END;
     IF (size.mode=Con)&(size.adr<=8)&(size.adr IN {1, 2, 4, 8}) THEN
-     CASE size.adr OF 1: z.scale := OPO.Scale1 | 2: z.scale := OPO.Scale2 | 4: z.scale := OPO.Scale4 | 8: z.scale := OPO.Scale8 END;
+     CASE size.adr OF 1: z.scale := OPIR.Scale1 | 2: z.scale := OPIR.Scale2 | 4: z.scale := OPIR.Scale4 | 8: z.scale := OPIR.Scale8 END;
     ELSE Mul(t, size, index, LInt); index := t END;
     z.inx := index.adr
    END
@@ -1828,11 +1828,11 @@ Intel i386 :
  (* move 'size' element from x to z, where 'element' has the size 'moveSize' (byte, word, dword *)
  VAR type: OPT.Struct;  src: Item; oldSize: LONGINT;
  BEGIN
-  ASSERT (moveSize IN {OPO.Bit8, OPO.Bit16, OPO.Bit32});
-  IF (size.mode = Con) & (moveSize IN {OPO.Bit16, OPO.Bit8})  THEN (* try to optimize *)
+  ASSERT (moveSize IN {OPIR.Bit8, OPIR.Bit16, OPIR.Bit32});
+  IF (size.mode = Con) & (moveSize IN {OPIR.Bit16, OPIR.Bit8})  THEN (* try to optimize *)
    oldSize := size.adr;
-   IF (size.adr MOD 4 = 0) & (moveSize = OPO.Bit8) THEN
-    size.adr := size.adr DIV 4; moveSize := OPO.Bit32
+   IF (size.adr MOD 4 = 0) & (moveSize = OPIR.Bit8) THEN
+    size.adr := size.adr DIV 4; moveSize := OPIR.Bit32
    ELSIF size.adr MOD 2 = 0 THEN
     size.adr := size.adr DIV 2; DEC (moveSize, 8) (* 8 bit -> 16 bit; 16  bit -> 32 bit *)
    END
@@ -1840,10 +1840,10 @@ Intel i386 :
   IF (size.mode = Con) & (size.adr = 0) THEN
    (* nothing to do *)
   ELSIF (size.mode = Con) & (size.adr = 1) THEN (* block size = 1, 2, 4 -> use assignment, do  not loop *)
-   ASSERT(moveSize IN {OPO.Bit8, OPO.Bit16, OPO.Bit32});
-   IF moveSize = OPO.Bit8 THEN
+   ASSERT(moveSize IN {OPIR.Bit8, OPIR.Bit16, OPIR.Bit32});
+   IF moveSize = OPIR.Bit8 THEN
     type := OPT.sinttyp
-   ELSIF moveSize = OPO.Bit16 THEN
+   ELSIF moveSize = OPIR.Bit16 THEN
     type := OPT.inttyp
    ELSE
     type := OPT.linttyp
@@ -1861,7 +1861,7 @@ Intel i386 :
    z.typ := type;
    GenStore(store, z, x);
     IF z.mode IN {Var, Abs} THEN INC(z.adr, oldSize) ELSE INC(z.offs, oldSize) END
-  ELSIF (size.mode = Con) & (size.adr = 3) & (moveSize = OPO.Bit8) THEN (* special case, often used *)
+  ELSIF (size.mode = Con) & (size.adr = 3) & (moveSize = OPIR.Bit8) THEN (* special case, often used *)
    IF x.mode # Reg THEN loadAdr(x) END;
    IF z.mode # Reg THEN loadAdr(z) END;
    x.mode := RegRel; x.offs := 0; x.inx := none; x.typ := OPT.inttyp;
@@ -1873,20 +1873,20 @@ Intel i386 :
    z.offs := 3
   ELSE
    IF (size.typ.form # LInt) & (size.mode # Con) THEN
-    Convert (size, LInt); OPL.Instr [size.adr].hint := OPL.useECX;
+    Convert (size, LInt); OPIR.Instr [size.adr].hint := OPIR.useReg1;
    ELSE
     IF size.mode # Reg THEN
-     size.typ := OPT.linttyp; load (size); OPL.Instr [size.adr].hint := OPL.useECX
-    ELSIF (size.adr > 0) & (OPL.Instr [size.adr].hint = OPL.noHint)  THEN OPL.Instr [size.adr].hint := OPL.tryECX
+     size.typ := OPT.linttyp; load (size); OPIR.Instr [size.adr].hint := OPIR.useReg1
+    ELSIF (size.adr > 0) & (OPIR.Instr [size.adr].hint = OPIR.noHint)  THEN OPIR.Instr [size.adr].hint := OPIR.tryReg1
     END
    END;
    IF x.mode # Reg THEN
-    loadAdr (x); OPL.Instr [x.adr].hint := OPL.useESI
-   ELSIF (x.adr >= 0) & (OPL.Instr [x.adr].hint = OPL.noHint) THEN OPL.Instr [x.adr].hint := OPL.tryESI
+    loadAdr (x); OPIR.Instr [x.adr].hint := OPIR.useReg6
+   ELSIF (x.adr >= 0) & (OPIR.Instr [x.adr].hint = OPIR.noHint) THEN OPIR.Instr [x.adr].hint := OPIR.tryReg6
    END;
    IF z.mode # Reg THEN
-    loadAdr (z); OPL.Instr [z.adr].hint := OPL.useEDI
-   ELSIF (z.adr >= 0) & (OPL.Instr [z.adr].hint = OPL.noHint) THEN OPL.Instr [z.adr].hint := OPL.tryEDI
+    loadAdr (z); OPIR.Instr [z.adr].hint := OPIR.useReg7
+   ELSIF (z.adr >= 0) & (OPIR.Instr [z.adr].hint = OPIR.noHint) THEN OPIR.Instr [z.adr].hint := OPIR.tryReg7
    END;
    Gen0 (cld);
    GenRepMovs (z, x, size, moveSize,  FALSE);
@@ -1898,24 +1898,24 @@ Intel i386 :
  (* same as MoveBlock, but reversed! *)
  VAR scale: SHORTINT; t: LONGINT;
  BEGIN
-  ASSERT (moveSize IN {OPO.Bit8, OPO.Bit16, OPO.Bit32});
-  IF (size.mode = Con) & (moveSize IN {OPO.Bit16, OPO.Bit8})  THEN (* try to optimize *)
-   IF (size.adr MOD 4 = 0) & (moveSize = OPO.Bit8) THEN
-    size.adr := size.adr DIV 4; moveSize := OPO.Bit32
+  ASSERT (moveSize IN {OPIR.Bit8, OPIR.Bit16, OPIR.Bit32});
+  IF (size.mode = Con) & (moveSize IN {OPIR.Bit16, OPIR.Bit8})  THEN (* try to optimize *)
+   IF (size.adr MOD 4 = 0) & (moveSize = OPIR.Bit8) THEN
+    size.adr := size.adr DIV 4; moveSize := OPIR.Bit32
    ELSIF size.adr MOD 2 = 0 THEN
     size.adr := size.adr DIV 2; DEC (moveSize, 8) (* 8 bit -> 16 bit; 16  bit -> 32 bit *)
    END
   END;
   IF (size.typ.form # LInt) & (size.mode # Con) THEN
-   Convert (size, LInt); OPL.Instr [size.adr].hint := OPL.useECX;
+   Convert (size, LInt); OPIR.Instr [size.adr].hint := OPIR.useReg1;
   ELSE
    IF size.mode # Reg THEN
-    size.typ := OPT.linttyp; load (size); OPL.Instr [size.adr].hint := OPL.useECX
-   ELSIF (size.adr > 0) & (OPL.Instr [size.adr].hint = OPL.noHint)  THEN OPL.Instr [size.adr].hint := OPL.tryECX
+    size.typ := OPT.linttyp; load (size); OPIR.Instr [size.adr].hint := OPIR.useReg1
+   ELSIF (size.adr > 0) & (OPIR.Instr [size.adr].hint = OPIR.noHint)  THEN OPIR.Instr [size.adr].hint := OPIR.tryReg1
    END
   END;
   ASSERT(size.mode=Reg);
-  CASE moveSize OF  OPO.Bit8: scale:=OPO.Scale1  |OPO.Bit16: scale:=OPO.Scale2  |OPO.Bit32: scale:=OPO.Scale4 END;
+  CASE moveSize OF  OPIR.Bit8: scale:=OPIR.Scale1  |OPIR.Bit16: scale:=OPIR.Scale2  |OPIR.Bit32: scale:=OPIR.Scale4 END;
   t := ASH(1, scale);
   
   IF x.mode = Reg THEN
@@ -1925,7 +1925,7 @@ Intel i386 :
   END;
   ASSERT(x.mode=RegRel);
   x.typ := OPT.linttyp;
-  x.inx := size.adr; x.scale := scale; DEC(x.offs, t); loadAdr (x); OPL.Instr [x.adr].hint := OPL.useESI;
+  x.inx := size.adr; x.scale := scale; DEC(x.offs, t); loadAdr (x); OPIR.Instr [x.adr].hint := OPIR.useReg6;
   
   IF z.mode = Reg THEN
    z.mode := RegRel; z.offs := 0
@@ -1934,7 +1934,7 @@ Intel i386 :
   END;
   ASSERT(z.mode=RegRel);
   z.typ := OPT.linttyp;
-  z.inx := size.adr; z.scale := scale; DEC(z.offs, t); loadAdr (z); OPL.Instr [z.adr].hint := OPL.useEDI;
+  z.inx := size.adr; z.scale := scale; DEC(z.offs, t); loadAdr (z); OPIR.Instr [z.adr].hint := OPIR.useReg7;
   
   Gen0 (std);
   GenRepMovs (z, x, size, moveSize,  TRUE);
@@ -1979,14 +1979,14 @@ Intel i386 :
  BEGIN
   ASSERT ((z.typ.form IN {LInt, Pointer}) & (x.typ.form IN {LInt, Pointer}));
   IF x.mode # Reg THEN
-   load (x); OPL.Instr [x.adr].hint := OPL.useESI
-  ELSIF OPL.Instr [x.adr].hint = OPL.noHint THEN OPL.Instr [x.adr].hint := OPL.tryESI
+   load (x); OPIR.Instr [x.adr].hint := OPIR.useReg6
+  ELSIF OPIR.Instr [x.adr].hint = OPIR.noHint THEN OPIR.Instr [x.adr].hint := OPIR.tryReg6
   END;
   IF z.mode # Reg THEN
-   load (z); OPL.Instr [z.adr].hint := OPL.useEDI
-  ELSIF OPL.Instr [z.adr].hint = OPL.noHint THEN OPL.Instr [z.adr].hint := OPL.tryEDI
+   load (z); OPIR.Instr [z.adr].hint := OPIR.useReg7
+  ELSIF OPIR.Instr [z.adr].hint = OPIR.noHint THEN OPIR.Instr [z.adr].hint := OPIR.tryReg7
   END;
-  MoveBlock (z, x, nofBytes, OPO.Bit8)
+  MoveBlock (z, x, nofBytes, OPIR.Bit8)
  END SYSmove;
  
  PROCEDURE Copy* (VAR z, x: Item); (* COPY (x, z) *)
@@ -1997,10 +1997,10 @@ Intel i386 :
   MakeCon (char0X, OPT.chartyp, 0);
   Length (zLen, z); Length (xLen, x);
   IF (zLen.mode = Con) & (xLen.mode = Con) THEN
-   IF zLen.adr >= xLen.adr THEN MoveBlock (z, x, xLen, OPO.Bit8)
+   IF zLen.adr >= xLen.adr THEN MoveBlock (z, x, xLen, OPIR.Bit8)
    ELSE
     DEC (zLen.adr); (* last char is always 0X *)
-    MoveBlock (z, x, zLen, OPO.Bit8);
+    MoveBlock (z, x, zLen, OPIR.Bit8);
     IF z.mode = Reg THEN
      t.adr := z.adr; t.mode := RegRel; t.offs := 0; t.inx := none; t.typ := OPT.chartyp; t.node := NIL;
     ELSE
@@ -2011,14 +2011,14 @@ Intel i386 :
   ELSE 
    (* pre-load the addresses (it will be done only once and will free some regs!!) *)
    IF x.mode#Reg THEN loadAdr (x) ELSE x0:=x; MakeCon(len, OPT.linttyp, 0); Add(x, x0, len, LInt) END;
-   OPL.Instr [x.adr].hint := OPL.tryESI;
-   loadAdr (z); OPL.Instr [z.adr].hint := OPL.tryEDI;
+   OPIR.Instr [x.adr].hint := OPIR.tryReg6;
+   loadAdr (z); OPIR.Instr [z.adr].hint := OPIR.tryReg7;
    IF zLen.mode = Con THEN 
     xLen0 := xLen;
     IF xLen.typ.form # LInt THEN Convert (xLen0, LInt)
     ELSE load (xLen0)
     END;
-    OPL.Instr [xLen0.adr].hint := OPL.tryECX;
+    OPIR.Instr [xLen0.adr].hint := OPIR.tryReg1;
     GenFlags (cmp, xLen0, zLen);
     Lfix := -2-pc;
     Gen1 (jg, Nil, NIL)
@@ -2027,7 +2027,7 @@ Intel i386 :
     IF zLen0.typ.form # LInt THEN Convert (zLen0, LInt)
     ELSE load (zLen0)
     END;
-    OPL.Instr [zLen0.adr].hint := OPL.tryECX;
+    OPIR.Instr [zLen0.adr].hint := OPIR.tryReg1;
     xLen0 := xLen;
     IF xLen0.mode # Con THEN
      IF xLen0.typ.form # LInt THEN Convert (xLen0, LInt)
@@ -2039,17 +2039,17 @@ Intel i386 :
     Gen1 (jl, Nil, NIL)
    END;
    (* first case: |src| <= |trg|: copy all *)
-   z0 := z; x0 := x; MoveBlock (z0, x0, xLen, OPO.Bit8);
+   z0 := z; x0 := x; MoveBlock (z0, x0, xLen, OPIR.Bit8);
    L := -2-pc; Gen1 (jmp, Nil, NIL);
    FixLink (Lfix);
    (* second case: |src| > |trg|: copy |trg|-1 bytes *)
    IF zLen.mode = Con THEN DEC (zLen.adr)
    ELSE
     MakeCon (len, OPT.linttyp, 1);
-    load (zLen); OPL.Instr [zLen.adr].hint := OPL.useECX;
+    load (zLen); OPIR.Instr [zLen.adr].hint := OPIR.useReg1;
     t := zLen; Sub (zLen, t, len, LInt)
    END;
-   MoveBlock (z, x, zLen, OPO.Bit8);
+   MoveBlock (z, x, zLen, OPIR.Bit8);
    IF z.mode = Reg THEN
     t.mode := RegRel; t.adr := z.adr; t.offs := 0; t.inx := none; t.typ := OPT.chartyp; t.node := NIL;
    ELSE
@@ -2146,7 +2146,7 @@ Intel i386 :
      ELSIF z.typ.comp = DynArr THEN
       CopyDynArr(z, x)
      ELSIF x.typ.size#4 THEN
-      MakeCon (sizeItem, OPT.linttyp, z.typ.size); step:=OPO.Bit8; (* optimize later in MoveBlock *)
+      MakeCon (sizeItem, OPT.linttyp, z.typ.size); step:=OPIR.Bit8; (* optimize later in MoveBlock *)
       temp:=z; MoveBlock (z, x, sizeItem, step)
      ELSE temp:=z; Move(z, x)
      END;
@@ -2205,7 +2205,7 @@ Intel i386 :
    END
   END;
   IF x.mode#Con THEN load (x) END; GenPush (x); 
-  GenCall (xcall, OPL.NewSysLinkIndex * 10000H + OPL.NewSysEntryNr, 8, NIL);
+  GenCall (xcall, OPIR.NewSysLinkIndex * 10000H + OPIR.NewSysEntryNr, 8, NIL);
  END NewSys;
  
  PROCEDURE NewArray* (VAR z, nofelem: Item; nofdim: LONGINT; typ: OPT.Struct; dimUsed: BOOLEAN);
@@ -2238,7 +2238,7 @@ Intel i386 :
    IF nofelem.mode#Con THEN load(nofelem) END;
    GenPush(nofelem);
    MakeCon(cons, OPT.linttyp, nofdim);  GenPush(cons);
-   GenCall(xcall, OPL.NewArrayLinkIndex * 10000H + OPL.NewArrayEntryNr, 16, NIL)
+   GenCall(xcall, OPIR.NewArrayLinkIndex * 10000H + OPIR.NewArrayEntryNr, 16, NIL)
   ELSE (* simple type -> use SYSTEM.NEW (...) *)
    IF nofelem.mode=Con THEN
     nofelem.adr := nofelem.adr*typ.size + ArrBlkFirstElem + 8 + 8*(nofdim DIV 2); (*rounded!*)
@@ -2271,7 +2271,7 @@ Intel i386 :
    IF typ.comp=DynArr THEN OPT.FindInScope(OPT.HdPtrStruct, OPT.topScope, o); typ := o.typ  END;
    GetTdAdr (typ, tag);
    load (tag); GenPush (tag);
-   GenCall (xcall, OPL.NewLinkIndex * 10000H + OPL.NewEntryNr, 8, NIL)
+   GenCall (xcall, OPIR.NewLinkIndex * 10000H + OPIR.NewEntryNr, 8, NIL)
   END
  END NewRec;
 
@@ -2304,7 +2304,7 @@ Intel i386 :
    IF safe IN typ.strobj.conval.setval THEN INC (type, 1) (* set bit 0 *) END;
    MakeCon (con, OPT.sinttyp, type); GenPush(con);
    load(self); GenPush(self);
-   GenCall(xcall, OPL.StartIndex * 10000H + OPL.StartEntryNr, 16, NIL)
+   GenCall(xcall, OPIR.StartIndex * 10000H + OPIR.StartEntryNr, 16, NIL)
   ELSE
    (* typ and self.typ can be different!!!*)
    tag := self;
@@ -2364,7 +2364,7 @@ Intel i386 :
    END;
    atyp := atyp.BaseTyp; ftyp := ftyp.BaseTyp; INC(depth);
   END;
-  IF (ap.mode=RegRel)&(ap.adr=ESP) THEN  INC(ap.offs, 4*depth)  END
+  IF (ap.mode=RegRel)&(ap.adr=SP) THEN  INC(ap.offs, 4*depth)  END
  END PushArrLen;
  
  PROCEDURE PushComp(fp: OPT.Object; VAR ap: Item);
@@ -2373,11 +2373,11 @@ Intel i386 :
   IF ap.typ.form = String THEN
    size := fp.typ.size; INC(size, (-size) MOD 4);
    MakeCon (sizeItem, OPT.linttyp, size); t:=Stack; Sub(t, Stack, sizeItem, LInt);
-   MakeCon (sizeItem, OPT.linttyp, ap.offs); t:=Stack; MoveBlock (t, ap, sizeItem, OPO.Bit8)
+   MakeCon (sizeItem, OPT.linttyp, ap.offs); t:=Stack; MoveBlock (t, ap, sizeItem, OPIR.Bit8)
   ELSIF ap.typ.size#4 THEN
    size := fp.typ.size; INC(size, (-size) MOD 4);
    MakeCon (sizeItem, OPT.linttyp, size); t:=Stack; Sub(t, Stack, sizeItem, LInt);
-   MakeCon (sizeItem, OPT.linttyp, fp.typ.size); t:=Stack; MoveBlock (t, ap, sizeItem, OPO.Bit8)
+   MakeCon (sizeItem, OPT.linttyp, fp.typ.size); t:=Stack; MoveBlock (t, ap, sizeItem, OPIR.Bit8)
   ELSE
    load(ap); GenPush(ap)
   END;
@@ -2395,7 +2395,7 @@ Intel i386 :
      t.inx := none; t.offs := 0; t.mnolev := ap.mnolev;
      load (t); GenPush (t);
      lastTD := t; (*remember the tag, used by Call later*)
-     IF (ap.mode=RegRel)&(ap.adr=ESP) THEN  INC(ap.offs, 4)  END;
+     IF (ap.mode=RegRel)&(ap.adr=SP) THEN  INC(ap.offs, 4)  END;
     END;
     IF ap.mode#Reg THEN loadAdr(ap) END; GenPush(ap)
    ELSE PushComp(fp, ap)
@@ -2416,7 +2416,7 @@ Intel i386 :
       GetTdAdr(ap.typ, tag); (* get typedescriptor address of static type *)
      END;
      load(tag); GenPush(tag);
-     IF (ap.mode=RegRel)&(ap.adr=ESP) THEN  INC(ap.offs, 4)  END;
+     IF (ap.mode=RegRel)&(ap.adr=SP) THEN  INC(ap.offs, 4)  END;
      lastTD := tag; (*remember the tag, used by Call later*)
     END;
     IF ap.mode#Reg THEN loadAdr(ap) END; GenPush(ap)
@@ -2553,9 +2553,9 @@ Intel i386 :
  PROCEDURE PushRetDesc*(VAR x, tos: Item); (*push return descriptor!*)
  VAR con: Item;
  BEGIN
-  ASSERT((tos.mode=RegRel)&(tos.adr=ESP), 101);
+  ASSERT((tos.mode=RegRel)&(tos.adr=SP), 101);
   IF x.typ.comp = Record THEN
-   IF (x.mode=RegRel)&(x.adr=ESP) THEN INC(x.offs, 4)  END;
+   IF (x.mode=RegRel)&(x.adr=SP) THEN INC(x.offs, 4)  END;
    MakeCon(con, OPT.linttyp, x.typ.size);  GenPush(con);
    INC(tos.offs, 4)
   END;
@@ -2566,7 +2566,7 @@ Intel i386 :
  VAR oldoff: LONGINT; typ: OPT.Struct;
  BEGIN
   typ := x.typ; x.typ := OPT.linttyp; (*to ensure that load works fine*)
-  IF (dynblocks#0)&(x.mode=RegRel)&(x.adr=ESP) THEN
+  IF (dynblocks#0)&(x.mode=RegRel)&(x.adr=SP) THEN
    oldoff := x.offs; x.offs := size;
    WHILE dynblocks#0 DO
     load(x); x.mode := RegRel; x.offs := 0;
@@ -2574,7 +2574,7 @@ Intel i386 :
    END;
    x.offs := oldoff
    (*oldoff := x.offs; x := oldsp; x.offs := oldoff*)
-  ELSIF (size#0)&(x.mode=RegRel)&(x.adr=ESP) THEN (*if the item is stack relative, correct the position after the allocation of temporary values*)
+  ELSIF (size#0)&(x.mode=RegRel)&(x.adr=SP) THEN (*if the item is stack relative, correct the position after the allocation of temporary values*)
    INC(x.offs, size)
   END;
   x.typ := typ
@@ -2585,7 +2585,7 @@ Intel i386 :
  BEGIN
   t := Stack;
   WHILE dynblocks#0 DO
-   GenPop(t); OPL.Instr [pc-1].hint := OPL.useESP;
+   GenPop(t); OPIR.Instr [pc-1].hint := OPIR.useReg4;
    DEC(dynblocks)
   END
  END ResetStack;
@@ -2599,7 +2599,7 @@ Intel i386 :
    t := Stack; MakeCon(con, OPT.linttyp, size);
    Sub(t, Stack, con, LInt);
   END;
-  tos.mode := RegRel; tos.adr := ESP; tos.offs := 0; tos.inx := none; tos.typ := OPT.linttyp;
+  tos.mode := RegRel; tos.adr := SP; tos.offs := 0; tos.inx := none; tos.typ := OPT.linttyp;
  END AllocateStatic;
 
  PROCEDURE RemoveStatic*(size: LONGINT);
@@ -2671,9 +2671,9 @@ Intel i386 :
  BEGIN
   IF ((proc # NIL) & (proc.sysflag = cdecl)) OR ((typ # NIL) & (typ.sysflag = cdecl)) THEN
    Z.mode := Reg; Z.typ := OPT.ptrtyp; Z.node := NIL;
-   Z.adr := ESP; Z.offs := 0; Z.inx := none;
+   Z.adr := SP; Z.offs := 0; Z.inx := none;
    X.mode := Reg; X.typ := OPT.ptrtyp; X.node := NIL;
-   X.adr := ESP; X.offs := 0; X.inx := none;
+   X.adr := SP; X.offs := 0; X.inx := none;
    Y.mode := Con; Y.typ := OPT.ptrtyp; Y.node := NIL;
    IF proc # NIL THEN
     Y.adr := ArgSize(proc.link)
@@ -2734,7 +2734,7 @@ Intel i386 :
      tag := lastTD
     ELSE (* pointer *)
      tag.mode := RegRel; tag.typ := OPT.ptrtyp; tag.node := NIL;
-     tag.adr := ESP; tag.offs := 0 (* obj.conval.intval - 12 *); tag.inx := none;
+     tag.adr := SP; tag.offs := 0 (* obj.conval.intval - 12 *); tag.inx := none;
      DeRef(tag); tag.mode := RegRel; tag.offs := -4;
      IF OPM.TDMask # 0 THEN
       t1 := tag; load(t1);
@@ -2782,26 +2782,26 @@ Intel i386 :
   IF n # NIL THEN (* result into ST(0) or EAX *)
    IF (n.typ.form = ProcTyp) & (n.typ.sysflag = delegate) THEN
     z.typ := delegateType; z.mode := Reg; z.adr := pc; z.descReg := pc-1;
-    GenPopReg (OPL.useEAX, OPT.linttyp.form);
-    OPL.Instr[pc-1].src1 := z.descReg;
-    INC(OPL.Instr[pc-1].op, 5); (*LInt -> HInt size *)
+    GenPopReg (OPIR.useReg0, OPT.linttyp.form);
+    OPIR.Instr[pc-1].src1 := z.descReg;
+    INC(OPIR.Instr[pc-1].op, 5); (*LInt -> HInt size *)
    ELSIF n.typ.form IN {Byte..LInt, Set, Pointer, ProcTyp} THEN
     z.typ := n.typ; z.mode := Reg; z.adr := pc;
-    GenPopReg (OPL.useEAX, z.typ.form)
+    GenPopReg (OPIR.useReg0, z.typ.form)
    ELSIF n.typ.form = HInt THEN
     z.typ := n.typ; z.mode := Reg; z.adr := pc; z.offs := pc-1;
-    GenPopReg (OPL.useEAX, OPT.linttyp.form);
-    OPL.Instr[pc-1].src1 := z.offs;
-    INC(OPL.Instr[pc-1].op, 5); (*LInt -> HInt size *)
+    GenPopReg (OPIR.useReg0, OPT.linttyp.form);
+    OPIR.Instr[pc-1].src1 := z.offs;
+    INC(OPIR.Instr[pc-1].op, 5); (*LInt -> HInt size *)
    ELSIF n.typ.comp IN {StaticArr, SDynArr, Record} THEN
-    GenPopReg (OPL.noHint, 0) (* no result, already copied *)
+    GenPopReg (OPIR.noHint, 0) (* no result, already copied *)
    ELSE (* z.typ.form IN realSet *)
     ASSERT (n.typ.form IN realSet);
     z.typ := n.typ; z.mode := Reg; z.adr := pc;
-    GenPopReg (OPL.useST, z.typ.form) (* top of stack contains result *)
+    GenPopReg (OPIR.useFReg, z.typ.form) (* top of stack contains result *)
    END
   ELSE
-   GenPopReg (OPL.noHint, 0) (* no result *)
+   GenPopReg (OPIR.noHint, 0) (* no result *)
   END
  END PopResult;
 
@@ -2818,7 +2818,7 @@ Intel i386 :
     ASSERT(size.mode IN {Con, Reg}, 130);
     MakeCon(adj, OPT.linttyp, 3); t0:=size; Gen3(add, size, t0, adj);
     MakeCon(shift, OPT.linttyp, 2); t0:=size; Gen3(sar, size, t0, shift);
-    Gen0(clear); OPL.Instr[pc-1].src1:=size.adr;   
+    Gen0(clear); OPIR.Instr[pc-1].src1:=size.adr;   
     t := Stack; Move (x, t)
    END;
    locals:=locals.link
@@ -2840,23 +2840,23 @@ Intel i386 :
     IF (par.typ.comp IN {OpenArr, SDynArr}) THEN
      MakeVar(x, par);
      TypeSize(x, size, step, scale);
-     ASSERT(step IN {OPO.Bit8, OPO.Bit16, OPO.Bit32});
-     ASSERT(scale IN {OPO.Scale1, OPO.Scale2, OPO.Scale4});
+     ASSERT(step IN {OPIR.Bit8, OPIR.Bit16, OPIR.Bit32});
+     ASSERT(scale IN {OPIR.Scale1, OPIR.Scale2, OPIR.Scale4});
      load(size);
      ASSERT(size.mode=Reg);
      Gen2(neg, t0, size);
-     z.mode:=RegRel; z.adr:=ESP; z.inx:=t0.adr; z.scale:=scale; z.typ:=OPT.linttyp;
-     loadAdr(z); OPL.Instr [pc-1].hint := OPL.useESP;
-     IF step # OPO.Bit32 THEN   (*clear the last 2 bits -> grows down!*)
+     z.mode:=RegRel; z.adr:=SP; z.inx:=t0.adr; z.scale:=scale; z.typ:=OPT.linttyp;
+     loadAdr(z); OPIR.Instr [pc-1].hint := OPIR.useReg4;
+     IF step # OPIR.Bit32 THEN   (*clear the last 2 bits -> grows down!*)
       z.typ := OPT.linttyp;
-      MakeCon(t0, OPT.linttyp, -4);  t1 := z; Gen3 (and, z, t1, t0); OPL.Instr [pc-1].hint := OPL.useESP
+      MakeCon(t0, OPT.linttyp, -4);  t1 := z; Gen3 (and, z, t1, t0); OPIR.Instr [pc-1].hint := OPIR.useReg4
      END;
      MoveBlockReversed(z, x, size, step);
-     MakeVar(x, par); x.typ := OPT.linttyp;  z.mode:=Reg; z.adr:=ESP; Move(x, z)
+     MakeVar(x, par); x.typ := OPT.linttyp;  z.mode:=Reg; z.adr:=SP; Move(x, z)
     ELSIF par.typ.comp = DynArr THEN
      MakeCon(x, OPT.linttyp, 0); GenPush(x); (*allocate*)
      MakeVar(z, par);
-     x.mode:=RegRel; x.adr:=ESP; x.offs:=0; x.inx:=none; x.typ:=par.typ; x.descReg:=none;
+     x.mode:=RegRel; x.adr:=SP; x.offs:=0; x.inx:=none; x.typ:=par.typ; x.descReg:=none;
      CopyDynArr(x, z);
      GenPop(x);
      MakeVar(z, par); Move(z, x);
@@ -2864,7 +2864,7 @@ Intel i386 :
      z.mode := Var; z.typ := OPT.linttyp; z.node := NIL; z.adr := par.linkadr; z.mnolev := par.mnolev;
      x.mode := VarPar; x.typ := OPT.linttyp; x.adr := par.adr; x.node := NIL; x.mnolev := par.mnolev;
      MakeCon (size, OPT.linttyp, par.typ.size);
-     MoveBlockReversed (z, x, size, OPO.Bit8)
+     MoveBlockReversed (z, x, size, OPIR.Bit8)
     END
    END;
    par := par.link
@@ -2880,12 +2880,12 @@ Intel i386 :
   IF res.mode = Coc THEN
    t := res;
    IF (t.offs = Nil) & (t.inx = Nil) THEN
-    MoveCoc (res, t); OPL.Instr [res.adr].hint := OPL.useEAX
+    MoveCoc (res, t); OPIR.Instr [res.adr].hint := OPIR.useReg0
    ELSE
     MoveCoc (res, t);
-    ASSERT (OPL.Instr [pc-2].op = phi);
-    pReg := OPL.Instr [pc-2].src1;
-    OPL.Instr [pReg].hint := OPL.useEAX
+    ASSERT (OPIR.Instr [pc-2].op = phi);
+    pReg := OPIR.Instr [pc-2].src1;
+    OPIR.Instr [pReg].hint := OPIR.useReg0
    END
   ELSE
    IF (res.typ.form = NoTyp) OR (res.mode IN {XProc, LProc}) THEN (* RETURN procedure *)
@@ -2928,7 +2928,7 @@ Intel i386 :
      IF res.mode#Var THEN load(negsize) END; (*only if needed!*)
     ELSE
      load(size); negsize.typ:=OPT.linttyp; Gen2(neg, negsize, size);
-     IF (step IN {OPO.Bit8, OPO.Bit16}) THEN
+     IF (step IN {OPIR.Bit8, OPIR.Bit16}) THEN
       MakeCon(t, OPT.linttyp, -4); t1:=negsize; Gen3(and, negsize, t1, t); (* negsize AND FFFFFFF7 *)
      END;
      sp.inx:=negsize.adr; sp.scale:=scale;
@@ -2936,7 +2936,7 @@ Intel i386 :
      (* if the returned value is not local, allocate stack for it *) 
     IF res.mode#Var THEN
      t:=Stack; t.mode:=RegRel; t.offs:=-12; t.inx:=negsize.adr; t.scale:=scale; (* LEA SP, -12[SP][size*scale]  -12 to cover the dims, ref and link*)
-     loadAdr(t); OPL.Instr[pc-1].hint:=OPL.useESP
+     loadAdr(t); OPIR.Instr[pc-1].hint:=OPIR.useReg4
     END;
      (* assign pointer to data [ref] *)
     loadAdr(sp); t:=sp; GenStore(store, ref, t);
@@ -2953,7 +2953,7 @@ Intel i386 :
     t:=sp; DEC(t.offs, 8); GenPop(savedPC); GenStore(store, t, savedPC);
     t:=sp; DEC(t.offs, 12); GenPop(savedFP); GenStore(store, t, savedFP);
      (* set the new SP *)
-    DEC(sp.offs, 12); loadAdr(sp); OPL.Instr[pc-1].hint:=OPL.useESP
+    DEC(sp.offs, 12); loadAdr(sp); OPIR.Instr[pc-1].hint:=OPIR.useReg4
     ;ASSERT(sp.typ=OPT.linttyp)
    ELSIF typ.comp = DynArr THEN
     t.mode := RegRel; t.adr := FP; t.offs := proc.conval.intval; t.typ := res.typ; t.inx := none;
@@ -2974,16 +2974,16 @@ Intel i386 :
     ELSE
      MakeCon(size, OPT.linttyp, typ.size)
     END;
-    MoveBlock(t, res, size, OPO.Bit8)
+    MoveBlock(t, res, size, OPIR.Bit8)
    ELSIF typ = OPT.hinttyp THEN
     IF res.mode = Reg THEN
-     OPL.Instr[res.adr].hint := OPL.useEAX;
-     OPL.Instr[res.offs].hint := OPL.useEDX
+     OPIR.Instr[res.adr].hint := OPIR.useReg0;
+     OPIR.Instr[res.offs].hint := OPIR.useReg2
     ELSE
      res.typ := OPT.linttyp;
      loadAdr(res); res.mode := RegRel; res1 := res;  INC(res1.offs, 4);
-     load(res); OPL.Instr[res.adr].hint := OPL.useEAX;
-     load(res1); OPL.Instr[res1.adr].hint := OPL.useEDX
+     load(res); OPIR.Instr[res.adr].hint := OPIR.useReg0;
+     load(res1); OPIR.Instr[res1.adr].hint := OPIR.useReg2
     END
    ELSIF (typ.form = ProcTyp) & (typ.sysflag = delegate) THEN
     IF res.mode = Con THEN
@@ -2992,11 +2992,11 @@ Intel i386 :
     ELSE
      load(res)
     END;
-    OPL.Instr[res.adr].hint := OPL.useEAX;
-    OPL.Instr[res.descReg].hint := OPL.useEDX
+    OPIR.Instr[res.adr].hint := OPIR.useReg0;
+    OPIR.Instr[res.descReg].hint := OPIR.useReg2
    ELSE
     load (res);
-    OPL.Instr [res.adr].hint := OPL.useEAX
+    OPIR.Instr [res.adr].hint := OPIR.useReg0
    END
   END
  END Return;
@@ -3009,7 +3009,7 @@ Intel i386 :
    Gen1 (ret, 0, NIL)
   ELSIF proc.typ.comp IN {OpenArr, SDynArr} THEN
    ebp.typ:=OPT.linttyp;
-   GenPop(ebp); OPL.Instr [pc-1].hint := OPL.useEBP;
+   GenPop(ebp); OPIR.Instr [pc-1].hint := OPIR.useReg5;
    Gen1 (ret, 0, NIL);
   ELSE (* procedure *)
    Gen1 (leave, proc.conval.intval2, NIL);
@@ -3029,7 +3029,7 @@ Intel i386 :
   IF self.typ.comp = Record THEN loadAdr (self) ELSE (*pointer*) load (self) END;
   GenPush (self);
   GenPush (excl); (* -> don't load (excl) because it's a boolean constant. This generates better code *)
-  GenCall (xcall, OPL.LockIndex * 10000H + OPL.LockEntryNr, 4, NIL);
+  GenCall (xcall, OPIR.LockIndex * 10000H + OPIR.LockEntryNr, 4, NIL);
  END Lock;
  
  PROCEDURE Unlock*(self, excl: Item);  (* active only *)
@@ -3038,7 +3038,7 @@ Intel i386 :
   IF self.typ.comp = Record THEN loadAdr (self) ELSE (*pointer*) load (self) END;
   GenPush (self);
   GenPush (excl); (* -> don't load (excl) because it's a boolean constant. This generates better code *)
-  GenCall (xcall, OPL.UnlockIndex * 10000H + OPL.UnlockEntryNr, 4, NIL);
+  GenCall (xcall, OPIR.UnlockIndex * 10000H + OPIR.UnlockEntryNr, 4, NIL);
  END Unlock;
 
  PROCEDURE Await*(z, self, y: Item); (* active only *)
@@ -3056,7 +3056,7 @@ Intel i386 :
   END;
   GenPush(self);
   GenPush(y);
-  GenCall(xcall, OPL.AwaitIndex * 10000H + OPL.AwaitEntryNr, 8, NIL);
+  GenCall(xcall, OPIR.AwaitIndex * 10000H + OPIR.AwaitEntryNr, 8, NIL);
  END Await;
 
  PROCEDURE Trap* (n: LONGINT; node: OPT.Node); (* HALT (n) *)
@@ -3076,7 +3076,7 @@ Intel i386 :
    MakeCon (const, OPT.linttyp, -1);
    load (len);
    GenFlags (cmp, len, const);
-   Gen1 (tle, OPL.DimTrap , NIL)
+   Gen1 (tle, OPIR.DimTrap , NIL)
   END
  END GenDimTrap;
 
@@ -3100,7 +3100,7 @@ Intel i386 :
   GenFlags (cmp, x, c);
   L := -2-pc; Gen1 (ja, Nil, node);
   OPL.AllocCaseTab (low, high, tab);
-  c.mode := Abs; c.typ := OPT.linttyp; c.adr := tab; c.inx := x.adr; c.scale := OPO.Scale4; c.node := NIL;
+  c.mode := Abs; c.typ := OPT.linttyp; c.adr := tab; c.inx := x.adr; c.scale := OPIR.Scale4; c.node := NIL;
   GenLoad (ld, y, c);
   Gen1 (jmpReg, y.adr, node)
  END Case;
@@ -3108,22 +3108,22 @@ Intel i386 :
  PROCEDURE CaseFixup* (tab: LONGINT; elseLabel: Label; len: LONGINT); (* case *)
  BEGIN
   InitInstr (case, 0, 0, NIL);
-  OPL.Instr [pc].src1 := tab; OPL.Instr [pc].src2 := elseLabel; OPL.Instr [pc].inx := len * 4;
+  OPIR.Instr [pc].src1 := tab; OPIR.Instr [pc].src2 := elseLabel; OPIR.Instr [pc].inx := len * 4;
   INC (pc)
  END CaseFixup;
  
 BEGIN
  MakeCon (True, OPT.booltyp, true);
  MakeCon (False, OPT.booltyp, false);
- Stack.mode := Reg; Stack.adr := ESP; Stack.node := NIL; Stack.typ := OPT.linttyp; Stack.offs := 0; Stack.inx := none;
+ Stack.mode := Reg; Stack.adr := SP; Stack.node := NIL; Stack.typ := OPT.linttyp; Stack.offs := 0; Stack.inx := none;
  ebp.mode := Reg; ebp.adr := FP; ebp.node := NIL; ebp.typ := OPT.linttyp;
  formTab[Undef] := 0;
- formTab[Byte] := OPO.Bit8 DIV 8; formTab[Bool] := OPO.Bit8 DIV 8; 
- formTab[Char] := OPO.Bit8 DIV 8; formTab[SInt] := OPO.Bit8 DIV 8;
- formTab[Int] := OPO.Bit16 DIV 8;
- formTab[LInt] := OPO.Bit32; formTab[Set] := OPO.Bit32;
- formTab[Pointer] := OPO.Bit32; formTab[ProcTyp] := OPO.Bit32; 
- formTab[NilTyp] := OPO.Bit32; formTab[Comp] := OPO.Bit32;
+ formTab[Byte] := OPIR.Bit8 DIV 8; formTab[Bool] := OPIR.Bit8 DIV 8; 
+ formTab[Char] := OPIR.Bit8 DIV 8; formTab[SInt] := OPIR.Bit8 DIV 8;
+ formTab[Int] := OPIR.Bit16 DIV 8;
+ formTab[LInt] := OPIR.Bit32; formTab[Set] := OPIR.Bit32;
+ formTab[Pointer] := OPIR.Bit32; formTab[ProcTyp] := OPIR.Bit32; 
+ formTab[NilTyp] := OPIR.Bit32; formTab[Comp] := OPIR.Bit32;
  formTab[Real] := 3;
  formTab[LReal] := 4;
  CCtab[0,0] := EQ; CCtab [0,1] := NE; CCtab [0,2] := LT; CCtab [0,3] := LE; CCtab [0,4] := GT; CCtab [0,5] := GE;

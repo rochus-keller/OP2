@@ -6,7 +6,7 @@ Refer to the license.txt file provided with this distribution. *)
 
 
 MODULE OPV; (** non-portable *)
- IMPORT OPS, OPT, OPL, OPO, OPC, OPM, Oberon, SYSTEM;
+ IMPORT OPS, OPT, OPIR, OPL, OPO, OPC, OPM, Oberon, SYSTEM;
 
 
  CONST
@@ -19,7 +19,7 @@ MODULE OPV; (** non-portable *)
   SProc = 8; CProc = 9; IProc = 10; Mod = 11; Head = 12; TProc = 13;
   
   (* item mode *)
-  Abs = OPO.Abs;
+  Abs = OPIR.Abs;
 
   (* symbol values and ops *)
   times = 1; slash = 2; div = 3; mod = 4;
@@ -657,7 +657,7 @@ END TypeName;
    Nvar, Nvarpar:
     obj := n.obj; 
     WHILE obj.scope # NIL DO obj := obj.scope; n.obj := obj END; (* WITH-bug fix *)
-    x.node := n; x.mnolev := obj.mnolev; x.scale := OPO.noScale; x.inx := OPL.none;
+    x.node := n; x.mnolev := obj.mnolev; x.scale := OPIR.noScale; x.inx := OPIR.none;
     IF obj.mnolev <= 0 THEN (* global or imported variable *)
      x.mode := Abs;
      IF obj.mnolev < 0 THEN (* imported variable *)
@@ -671,7 +671,7 @@ END TypeName;
     ELSE (* Var, VarPar *)
      x.mode := obj.mode; x.adr := obj.linkadr
     END;
-    x.offs := 0; x.descReg := OPL.none
+    x.offs := 0; x.descReg := OPIR.none
     | Nfield:
     Designator (n.left, x);
     IF (n.obj.mode = TProc) THEN
@@ -909,14 +909,14 @@ END TypeName;
       z.mode := Con; z.adr := SYSTEM.VAL (LONGINT, con.setval)
       | String:
       AllocConst (con.ext^, con.intval2, 4); 
-      z.mode := Abs; z.adr := con.intval; z.offs := con.intval2 (* length *); z.inx := OPL.none
+      z.mode := Abs; z.adr := con.intval; z.offs := con.intval2 (* length *); z.inx := OPIR.none
       | Real:
       real := SHORT (con.realval);
       AllocConst (real, 4, 4); 
-      z.mode := Abs; z.adr := con.intval; z.inx := OPL.none
+      z.mode := Abs; z.adr := con.intval; z.inx := OPIR.none
       | LReal:
       AllocConst (con.realval, 8, 4);
-      z.mode := Abs; z.adr := con.intval; z.inx := OPL.none
+      z.mode := Abs; z.adr := con.intval; z.inx := OPIR.none
     END
     | Nupto:
     Expression (n.left, x, selfForUnlock); Expression (n.right, y, selfForUnlock); OPC.SetRange (z, x, y)
@@ -1035,7 +1035,7 @@ END TypeName;
   END;
   OPC.FixLink (elseLabel); elseLabel := OPC.pc;
   IF n.right.conval.setval # {} THEN Statement (n.right.right, selfForUnlock) (* ELSE part *)
-  ELSE OPC.Trap (OPL.CaseTrap, n)
+  ELSE OPC.Trap (OPIR.CaseTrap, n)
   END;
   OPC.CaseFixup (tab, elseLabel, high - low + 1);
   OPC.FixLink (L) 
@@ -1105,7 +1105,7 @@ END TypeName;
         OPC.AllocSDynArr(proc);  (*and alloc the SDynArrs*)
        END;
        Statement (n.right, NIL);
-       IF (proc.typ # OPT.notyp) & ~(asmProc IN proc.conval.setval) & (proc.mode # Typ) THEN OPC.Trap (OPL.FuncTrap, n)
+       IF (proc.typ # OPT.notyp) & ~(asmProc IN proc.conval.setval) & (proc.mode # Typ) THEN OPC.Trap (OPIR.FuncTrap, n)
        ELSE OPC.Exit (proc)
        END;
        OPL.OutRefPoint (proc);
@@ -1258,7 +1258,7 @@ END TypeName;
      IfStat (n.left, selfForUnlock, L, Lc, TRUE); (* L label for jump to END of if statement, Lc for the ELSE statement *)
      OPC.FixLink (Lc);
      IF n.subcl = 1 (*  # NIL *) THEN Statement (n.right, selfForUnlock)
-     ELSE OPC.Trap (OPL.WithTrap, n)
+     ELSE OPC.Trap (OPIR.WithTrap, n)
      END;
      OPC.FixLink (L)
      | Ntrap:
