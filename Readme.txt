@@ -1,4 +1,4 @@
-System 3 Release 2.3.7 Alpha
+The OP2 compiler from System 3 Release 2.3.7 Alpha
 Downloaded from https://sourceforge.net/projects/nativeoberon/files/nativeoberon/Native%20Oberon%202.3.7%20Alpha/NativeOberon2.3.7.tar.gz/download
 Accessed 2025-07-11 
 
@@ -18,3 +18,10 @@ runs on all platforms and generates x86 OP2 v2.3.7 object files compatible with
 the Oberon System 3. Inline assembly is supported if the OPA.Data is in the same
 directory as the compiler executable. This allows to cross-compile a full
 Oberon System 3.
+
+The bootlinker is a migration of the Oberon System BootLinker.Mod with a few additions
+which make it useful for other projects than the Oberon System. It can generate a
+Multiboot header and add stack initialization. With this, e.g. the MainLoop testcase 
+together with the RawOut module work well on QEMU. Newer versions of the bootlinker
+include multi-target support.
+

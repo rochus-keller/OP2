@@ -1,7 +1,10 @@
 /*
 * Copyright 2026 Rochus Keller <mailto:me@rochus-keller.ch>
 *
+* Multi-architecture boot linker for the Oberon System 3
+*
 * Standalone C99 port of BootLinker.Mod (Native Oberon static boot linker)
+* with support for multiple target architectures: i386, ARM32, RV32.
 *
 * Notes:
 * - This is a format-preserving translation intended to reproduce the same
@@ -10,9 +13,11 @@
 * - In addition to the original version it can add a Multiboot header and
 *   initialize the stack (and push the Multiboot info pointer to the stack).
 * - The tool also works without the presence of Kernel module.
+* - Architecture-specific code generation is abstracted via ArchOps function
+*   pointers, making it easy to add new targets without modifying the core linker.
 *
 * compile e.g. with:
-*   cc -std=c99 -O2 -Wall -Wextra -o bootlinker bootlinker.c
+*   cc -std=c99 -O2 -Wall -Wextra -o multibootlinker multibootlinker.c
 *
 * The following is the license that applies to this copy of the
 * file. For a license to use the file under conditions
@@ -42,6 +47,37 @@
 /* Constants (from BootLinker.Mod) */
 
 enum {
+    /* SysFix constants */
+    newSF = 0,          // "new", "Kernel.NewRec"
+    sysnewSF = 1,       // "sysnew", "Kernel.NewSys"
+    newarrSF = 2,       // "newarr", "Kernel.NewArr"
+    StartSF = 3,        // "start", ""
+    PassivateSF = 4,    // "passivate", ""
+    ActivateSF = 5,     // "activate", ""
+    LockSF = 6,         // "lock", ""
+    UnlockSF = 7,       // "unlock", ""
+    copyarraySF = 10,
+    CurProcSF = 11,     // "", ""
+    commandSF = 12,     // "command", ""
+    listSF = 13,        // "list", "Kernel.modules"
+    modDescSF = 14,     // "mdesc", "Kernel.ModuleDesc"
+    expDescSF = 15,     // "expdesc", "Kernel.ExportDesc"
+    objectSF = 16,      // "", ""
+    MaxSF = 17,
+
+    /*
+     * Unused:
+     * CheckSF = 8;
+     * newsysarrSF = 9;
+    */
+    // automatically resolved from Kernel module:
+    // newSf..copyarraySF, CurProcSF, listSF, modDescSF, expDescSF
+
+    // SysFixes like passivate, activate etc. are no Oberon System feature and thus
+    // not related to Kernel features here.
+};
+
+enum {
     Boundary = 32,
     PageSize = 4096,
 
@@ -49,25 +85,6 @@ enum {
 
     PaddingSize = 64,
     hiddenTD = 20,
-
-    /* SysFix constants */
-    MaxSF = 17,
-    newSF = 0,
-    sysnewSF = 1,
-    newarrSF = 2,
-    StartSF = 3,
-    PassivateSF = 4,
-    ActivateSF = 5,
-    LockSF = 6,
-    UnlockSF = 7,
-    /* CheckSF = 8; newsysarrSF = 9; */
-    copyarraySF = 10,
-    CurProcSF = 11,
-    commandSF = 12,
-    listSF = 13,
-    modDescSF = 14,
-    expDescSF = 15,
-    objectSF = 16,
 
     /* FindAdr modes */
     Proc = 0,
@@ -276,6 +293,51 @@ typedef struct {
 } DumpModuleDesc;
 
 /* ------------------------------------------------------------ */
+/* Architecture abstraction */
+
+typedef struct ArchOps ArchOps;
+struct ArchOps {
+    const char *name;
+
+    /* Size of one call instruction in bytes (5 for x86 CALL rel32, 4 for ARM BL / RV32 JAL) */
+    int32_t call_instr_size;
+
+    /* Size of the halt/idle sequence in bytes */
+    int32_t halt_seq_size;
+
+    /* Patch a procedure-call fixup chain in the in-memory code buffer.
+     * Walks the linked list starting at code[link], following msw() links.
+     * Writes the architecture-specific call/branch encoding targeting 'target'. */
+    void (*PatchFunctionCall)(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target);
+
+    /* Emit one call instruction to the output file at the given PC, targeting 'target'. */
+    void (*WriteCallInstruction)(FILE *out, int32_t target, int32_t pc);
+
+    /* Emit the halt/idle sequence at the end of the init code block. */
+    void (*EmitHaltSequence)(FILE *out);
+
+    /* Emit the stack initialization preamble into the init code block.
+     * Returns the number of bytes emitted (0 if not applicable).
+     * 'initial_sp' is the desired initial stack pointer value.
+     * 'multiboot' indicates whether to push Multiboot info (x86-specific). */
+    int32_t (*EmitStackPreamble)(FILE *out, int32_t initial_sp, bool multiboot);
+
+    /* Patch the image header at the beginning of the output file.
+     * 'base' is the image base address, 'entry' is the entry point address,
+     * 'size' is the total image size, 'ramSize' is optional RAM size (0 if unused). */
+    void (*PatchImageHeader)(FILE *out, int32_t base, int32_t entry,
+                             int32_t size, int32_t ramSize);
+
+    /* Patch a Multiboot header at the beginning of the output file.
+     * Returns false if Multiboot is not supported on this architecture. */
+    bool (*PatchMultibootHeader)(FILE *out, int32_t base, int32_t entry, int32_t size);
+};
+
+/* ArchOps instances are defined after the arch-specific implementations below. */
+static const ArchOps arch_i386, arch_arm32, arch_rv32;
+static const ArchOps *arch = &arch_i386; /* default */
+
+/* ------------------------------------------------------------ */
 /* Globals */
 
 static SysFixEntry SysFix[MaxSF];
@@ -288,15 +350,18 @@ static int32_t listSF_offset = 0;
 
 static int32_t imageBase = -1;
 static int32_t imageSize = 0;
+static int32_t ramSize = 0;
 
 static int32_t nofEntryPoints = 0;
 static InitPointNode *initPointList = NULL;
 
 static uint8_t padding[PaddingSize];
 
-static char extension[8] = ".Obj";
+static char extension[] = ".Obj";
 
 static FILE *logFile = NULL;
+
+static char* modulePath = NULL;
 
 /* last loader error */
 static int32_t res = 0;
@@ -421,11 +486,18 @@ static void halt_msg(const char *msg) {
     exit(100);
 }
 
+static void sysfix_warning(int i) {
+    if (SysFix[i].adr == 0) {
+        fprintf(stderr, "warning: system fixup '%s' not resolved\n", SysFix[i].name);
+    }
+}
+
 /* ------------------------------------------------------------ */
 /* Utility: string handling */
 
 static void str_concat(const char *s1, const char *s2, char *out, size_t out_sz) {
-    if (out_sz == 0) return;
+    if (out_sz == 0)
+        return;
     out[0] = 0;
     strncat(out, s1, out_sz - 1);
     strncat(out, s2, out_sz - 1 - strlen(out));
@@ -621,10 +693,13 @@ static void add_init_point(int32_t entryPoint, Module *object) {
 /* ------------------------------------------------------------ */
 /* SysFix initialization */
 
-static void init_sysfix(int idx, const char *name, const char *module, const char *command) {
+static void init_sysfix(int idx, const char *name, const char *module, const char *command, bool autofix) {
     snprintf(SysFix[idx].name, sizeof(SysFix[idx].name), "%s", name);
-    snprintf(SysFix[idx].module, sizeof(SysFix[idx].module), "%s", module);
-    snprintf(SysFix[idx].command, sizeof(SysFix[idx].command), "%s", command);
+    if( autofix )
+    {
+        snprintf(SysFix[idx].module, sizeof(SysFix[idx].module), "%s", module);
+        snprintf(SysFix[idx].command, sizeof(SysFix[idx].command), "%s", command);
+    }
     SysFix[idx].adr = 0;
 }
 
@@ -632,26 +707,31 @@ static void init_sysfix(int idx, const char *name, const char *module, const cha
 static int32_t moduleDescSize = 0;
 static int32_t mDescPadSize = 0;
 
-static void initialise(void) {
+static void initialise(bool autofix) {
     objectList = NULL;
     includeRefs = true;
     res = done;
 
     memset(SysFix, 0, sizeof(SysFix));
-    init_sysfix(newSF, "new", "Kernel", "NewRec");
-    init_sysfix(sysnewSF, "sysnew", "Kernel", "NewSys");
-    init_sysfix(newarrSF, "newarr", "Kernel", "NewArr");
-    init_sysfix(StartSF, "start", "", "");
-    init_sysfix(PassivateSF, "passivate", "", "");
-    init_sysfix(ActivateSF, "activate", "", "");
-    init_sysfix(LockSF, "lock", "", "");
-    init_sysfix(UnlockSF, "unlock", "", "");
-    init_sysfix(CurProcSF, "", "", "");
-    init_sysfix(commandSF, "command", "", "");
-    init_sysfix(listSF, "list", "Kernel", "modules");
-    init_sysfix(modDescSF, "mdesc", "Kernel", "ModuleDesc");
-    init_sysfix(expDescSF, "expdesc", "Kernel", "ExportDesc");
-    init_sysfix(objectSF, "", "", "");
+
+    init_sysfix(newSF, "new", "Kernel", "NewRec", autofix);
+    init_sysfix(sysnewSF, "sysnew", "Kernel", "NewSys", autofix);
+    init_sysfix(newarrSF, "newarr", "Kernel", "NewArr", autofix);
+
+    init_sysfix(listSF, "list", "Kernel", "modules", autofix);
+    init_sysfix(modDescSF, "mdesc", "Kernel", "ModuleDesc", autofix);
+    init_sysfix(expDescSF, "expdesc", "Kernel", "ExportDesc", autofix);
+
+    init_sysfix(StartSF, "start", "", "", 0);
+    init_sysfix(PassivateSF, "passivate", "", "", 0);
+    init_sysfix(ActivateSF, "activate", "", "", 0);
+    init_sysfix(LockSF, "lock", "", "", 0);
+    init_sysfix(UnlockSF, "unlock", "", "", 0);
+
+    init_sysfix(CurProcSF, "", "", "", 0);
+    init_sysfix(objectSF, "", "", "", 0);
+
+    init_sysfix(commandSF, "command", "", "", 0);
 
     nofEntryPoints = 0;
     initPointList = NULL;
@@ -680,19 +760,394 @@ static int32_t get_dword(const uint8_t *code, int32_t idx) {
             ((uint32_t)code[idx + 2] << 16) | ((uint32_t)code[idx + 3] << 24));
 }
 
-static void fixup_call(uint8_t *codeNow, int32_t codeImgBase, int32_t link, int32_t fixval) {
+/* ------------------------------------------------------------ */
+/* Architecture-specific implementations */
+
+/* ---- i386 ---- */
+
+static void i386_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     int32_t instr, nextlink, jmp;
     do {
-        instr = get_dword(codeNow, link);
+        instr = get_dword(code, link);
         nextlink = msw(instr);
-        jmp = get_dword(codeNow, link - 1);
+        jmp = get_dword(code, link - 1);
         if ((lsw(jmp) % 0x100) == 0xE8) {
-            put_dword(codeNow, link, fixval - (codeImgBase + link + 4));
+            /* CALL rel32: target - (PC after instruction) */
+            put_dword(code, link, target - (codeImgBase + link + 4));
         } else {
-            put_dword(codeNow, link, fixval);
+            /* absolute address (e.g. procedure variable assignment) */
+            put_dword(code, link, target);
         }
         link = nextlink;
     } while (link != 0xFFFF);
+}
+
+static void i386_WriteCallInstruction(FILE *out, int32_t target, int32_t pc) {
+    uint8_t buf[5];
+    buf[0] = 0xE8; /* CALL rel32 */
+    int32_t rel = target - (pc + 5);
+    buf[1] = (uint8_t)(rel & 0xFF);
+    buf[2] = (uint8_t)((rel >> 8) & 0xFF);
+    buf[3] = (uint8_t)((rel >> 16) & 0xFF);
+    buf[4] = (uint8_t)((rel >> 24) & 0xFF);
+    write_bytes(out, buf, 5);
+}
+
+static void i386_EmitHaltSequence(FILE *out) {
+    /* STI; NOP; JMP $-1 (infinite loop with interrupts enabled) */
+    uint8_t tail[4] = {0xFB, 0x90, 0xEB, 0xFD};
+    write_bytes(out, tail, sizeof(tail));
+}
+
+static int32_t i386_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multiboot) {
+    int32_t emitted = 0;
+
+    /* MOV ESP, imm32 */
+    uint8_t esp_code[5];
+    esp_code[0] = 0xBC; /* opcode for MOV ESP, imm32 */
+    esp_code[1] = (uint8_t)(initial_sp & 0xFF);
+    esp_code[2] = (uint8_t)((initial_sp >> 8) & 0xFF);
+    esp_code[3] = (uint8_t)((initial_sp >> 16) & 0xFF);
+    esp_code[4] = (uint8_t)((initial_sp >> 24) & 0xFF);
+    write_bytes(out, esp_code, 5);
+    emitted += 5;
+
+    if (multiboot) {
+        /* PUSH EBX — Multiboot info pointer */
+        write_u8(out, 0x53);
+        emitted += 1;
+     }
+
+    return emitted;
+}
+
+static void i386_PatchImageHeader(FILE *out, int32_t base, int32_t entry,
+                                  int32_t size, int32_t rs) {
+    (void)rs; /* ramSize not used in i386 standard header */
+
+    /* At file offset 0: E8 + rel32 (CALL to entry point) */
+    seek_abs(out, 0);
+    write_u8(out, 0xE8);
+    write_i32_le(out, entry - (base + 5));
+
+    seek_abs(out, 6);
+    write_i32_le(out, base); /* LinkBase */
+
+    seek_abs(out, 22);
+    write_i32_le(out, base + size); /* HeapStart */
+
+    seek_abs(out, 30);
+    write_i32_le(out, 0); /* PatchSize */
+
+    log_ln();
+    log_puts("PatchHeaders:"); log_ln();
+    log_puts("  link base: "); log_hex(base); log_ln();
+    log_puts("  image size: "); log_hex(size); log_ln();
+    log_puts("  heap start: "); log_hex(base + size); log_ln();
+    log_puts("  entry point: "); log_hex(entry - (base + 5)); log_ln();
+    log_ln();
+}
+
+static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, int32_t size) {
+    uint32_t magic = 0x1BADB002;
+    uint32_t flags = 0x00010000; /* bit 16: raw binary, use provided addresses */
+    uint32_t checksum = -(magic + flags);
+
+    seek_abs(out, 0);
+
+    write_u32_le(out, magic);
+    write_u32_le(out, flags);
+    write_u32_le(out, checksum);
+
+    /* AOUT kludge addresses */
+    uint32_t header_addr  = (uint32_t)base;
+    uint32_t load_addr    = (uint32_t)base;
+    uint32_t load_end_addr = (uint32_t)(base + size);
+    uint32_t bss_end_addr  = (uint32_t)(base + size);
+    uint32_t entry_addr   = (uint32_t)entry;
+
+    write_u32_le(out, header_addr);
+    write_u32_le(out, load_addr);
+    write_u32_le(out, load_end_addr);
+    write_u32_le(out, bss_end_addr);
+    write_u32_le(out, entry_addr);
+
+    log_ln();
+    log_puts("PatchHeaders (Multiboot):"); log_ln();
+    log_puts("  load_addr: "); log_hex((int32_t)load_addr); log_ln();
+    log_puts("  entry_addr: "); log_hex((int32_t)entry_addr); log_ln();
+    log_ln();
+
+    return true;
+}
+
+/* ---- ARMv6/v7 ---- */
+
+static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
+    while (link != 0xFFFF) {
+        int32_t instr = get_dword(code, link);
+        int32_t nextlink = msw(instr);
+        /* ARM BL: offset = (target - (PC + 8)) >> 2, encoded in low 24 bits */
+        int32_t offset = (target - (codeImgBase + link + 8)) >> 2;
+        int32_t bl = (int32_t)0xEB000000u | (offset & 0x00FFFFFF);
+        put_dword(code, link, bl);
+        link = nextlink;
+    }
+}
+
+static void arm_WriteCallInstruction(FILE *out, int32_t target, int32_t pc) {
+    /* ARM BL instruction: 0xEB000000 | offset[23:0] */
+    int32_t offset = (target - (pc + 8)) >> 2;
+    int32_t bl = (int32_t)0xEB000000u | (offset & 0x00FFFFFF);
+    write_i32_le(out, bl);
+}
+
+static void arm_EmitHaltSequence(FILE *out) {
+    /* CPSIE i; WFI; B . (infinite loop) */
+    write_i32_le(out, (int32_t)0xF1080080u); /* CPSIE i */
+    write_i32_le(out, (int32_t)0xE320F003u); /* WFI */
+    write_i32_le(out, (int32_t)0xEAFFFFFEu); /* B . (branch to self) */
+}
+
+static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multiboot) {
+    /* MOV SP, #(initial_sp & 0xFFFF)  — lower 16 bits via MOVW
+     * MOVT SP, #(initial_sp >> 16)    — upper 16 bits
+     * ARM encoding for MOVW Rd, #imm16: 0xE30D0000 | (imm4 << 16) | (Rd << 12) | imm12
+     *   where imm16 = (imm4 << 12) | imm12, Rd = 13 (SP)
+     * ARM encoding for MOVT Rd, #imm16: 0xE34D0000 | (imm4 << 16) | (Rd << 12) | imm12 */
+    int32_t emitted = 0;
+
+    uint32_t lo16 = (uint32_t)initial_sp & 0xFFFF;
+    uint32_t hi16 = ((uint32_t)initial_sp >> 16) & 0xFFFF;
+
+    /* MOVW SP, #lo16 */
+    uint32_t movw = 0xE300D000u | ((lo16 & 0xF000) << 4) | (lo16 & 0x0FFF);
+    write_i32_le(out, (int32_t)movw);
+
+    /* MOVT SP, #hi16 */
+    uint32_t movt = 0xE340D000u | ((hi16 & 0xF000) << 4) | (hi16 & 0x0FFF);
+    write_i32_le(out, (int32_t)movt);
+    emitted += 8;
+
+    if (multiboot) {
+        /* PUSH {R2} — boot info / device tree pointer
+         * STMDB SP!, {R2} = 0xE92D0004 */
+        write_i32_le(out, (int32_t)0xE92D0004u);
+        emitted += 4;
+    }
+
+    return emitted;
+}
+
+static void arm_PatchImageHeader(FILE *out, int32_t base, int32_t entry,
+                                 int32_t size, int32_t rs) {
+    /* ARM header layout:
+     * offset  0: B <entry> (branch to entry point)
+     * offset  4: LinkBase
+     * offset  8: HeapStart
+     * offset 12: ImageSize
+     * offset 16: RAMSize (optional) */
+
+    /* ARM B instruction: 0xEA000000 | offset[23:0] */
+    int32_t branch_offset = (entry - (base + 8)) >> 2;
+    int32_t branch = (int32_t)0xEA000000u | (branch_offset & 0x00FFFFFF);
+
+    seek_abs(out, 0);
+    write_i32_le(out, branch);    /* B <entry> */
+
+    seek_abs(out, 4);
+    write_i32_le(out, base);      /* LinkBase */
+
+    seek_abs(out, 8);
+    write_i32_le(out, base + size); /* HeapStart */
+
+    seek_abs(out, 12);
+    write_i32_le(out, size);      /* ImageSize */
+
+    if (rs > 0) {
+        seek_abs(out, 16);
+        write_i32_le(out, rs);    /* RAMSize */
+    }
+
+    log_ln();
+    log_puts("PatchHeaders (ARM):"); log_ln();
+    log_puts("  link base: "); log_hex(base); log_ln();
+    log_puts("  image size: "); log_hex(size); log_ln();
+    log_puts("  heap start: "); log_hex(base + size); log_ln();
+    log_puts("  entry point: "); log_hex(entry); log_ln();
+    if (rs > 0) {
+        log_puts("  ram size: "); log_hex(rs); log_ln();
+    }
+    log_ln();
+}
+
+static bool arm_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, int32_t size) {
+    (void)out; (void)base; (void)entry; (void)size;
+    return false; /* Multiboot is not supported on ARM */
+}
+
+/* ---- RV32 (RISC-V 32-bit) ---- */
+
+/* Encode a RISC-V J-type immediate (for JAL).
+ * The 21-bit signed offset is encoded as: imm[20|10:1|11|19:12] in bits [31:12]. */
+static uint32_t rv32_encode_j_imm(int32_t offset) {
+    uint32_t u = (uint32_t)offset;
+    return ((u & 0x100000) << 11) |  /* imm[20] -> bit 31 */
+           ((u & 0x0007FE) << 20) |  /* imm[10:1] -> bits 30:21 */
+           ((u & 0x000800) << 9)  |  /* imm[11] -> bit 20 */
+           (u & 0x0FF000);           /* imm[19:12] -> bits 19:12 */
+}
+
+static void rv32_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
+    while (link != 0xFFFF) {
+        int32_t instr = get_dword(code, link);
+        int32_t nextlink = msw(instr);
+        /* JAL ra, offset: opcode 0x6F, rd=1 (ra) */
+        int32_t offset = target - (codeImgBase + link);
+        uint32_t jal = 0x000000EFu | rv32_encode_j_imm(offset);
+        put_dword(code, link, (int32_t)jal);
+        link = nextlink;
+    }
+}
+
+static void rv32_WriteCallInstruction(FILE *out, int32_t target, int32_t pc) {
+    /* JAL ra, offset */
+    int32_t offset = target - pc;
+    uint32_t jal = 0x000000EFu | rv32_encode_j_imm(offset);
+    write_i32_le(out, (int32_t)jal);
+}
+
+static void rv32_EmitHaltSequence(FILE *out) {
+    /* WFI: 0x10500073 */
+    write_i32_le(out, (int32_t)0x10500073u);
+    /* J . (JAL x0, 0 — jump to self): offset=0, rd=0 -> opcode 0x6F */
+    write_i32_le(out, (int32_t)0x0000006Fu);
+}
+
+static int32_t rv32_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multiboot) {
+    /* LUI sp, upper20  (sp = x2, so rd=2)
+     * ADDI sp, sp, lower12
+     *
+     * LUI: imm[31:12] | rd | 0110111
+     * ADDI: imm[11:0] | rs1 | 000 | rd | 0010011 */
+    int32_t emitted = 0;
+    uint32_t addr = (uint32_t)initial_sp;
+
+    /* Split into upper 20 and lower 12 bits.
+     * If lower12 is negative (bit 11 set), add 1 to upper to compensate. */
+    int32_t lower12 = ((int32_t)(addr << 20)) >> 20; /* sign-extend low 12 bits */
+    uint32_t upper20 = (addr - (uint32_t)lower12) & 0xFFFFF000u;
+
+    /* LUI x2, upper20 */
+    uint32_t lui = upper20 | (2 << 7) | 0x37;
+    write_i32_le(out, (int32_t)lui);
+
+    /* ADDI x2, x2, lower12 */
+    uint32_t addi = ((uint32_t)lower12 << 20) | (2 << 15) | (0 << 12) | (2 << 7) | 0x13;
+    write_i32_le(out, (int32_t)addi);
+    emitted += 8;
+
+    if (multiboot) {
+        /* Push A1 (x11) onto stack — boot info / device tree pointer
+         * ADDI sp, sp, -4 : 0xFFC10113
+         * SW   a1, 0(sp)  : 0x00B12023 */
+        write_i32_le(out, (int32_t)0xFFC10113u); /* ADDI sp, sp, -4 */
+        write_i32_le(out, (int32_t)0x00B12023u); /* SW a1, 0(sp) */
+        emitted += 8;
+    }
+
+    return emitted;
+}
+
+static void rv32_PatchImageHeader(FILE *out, int32_t base, int32_t entry,
+                                  int32_t size, int32_t rs) {
+    /* RV32 header layout (same structure as ARM):
+     * offset  0: JAL x0, <entry> (unconditional jump to entry point)
+     * offset  4: LinkBase
+     * offset  8: HeapStart
+     * offset 12: ImageSize
+     * offset 16: RAMSize (optional) */
+
+    int32_t offset = entry - base;
+    uint32_t jal = 0x0000006Fu | rv32_encode_j_imm(offset); /* JAL x0 */
+
+    seek_abs(out, 0);
+    write_i32_le(out, (int32_t)jal); /* JAL x0, <entry> */
+
+    seek_abs(out, 4);
+    write_i32_le(out, base);         /* LinkBase */
+
+    seek_abs(out, 8);
+    write_i32_le(out, base + size);  /* HeapStart */
+
+    seek_abs(out, 12);
+    write_i32_le(out, size);         /* ImageSize */
+
+    if (rs > 0) {
+        seek_abs(out, 16);
+        write_i32_le(out, rs);       /* RAMSize */
+    }
+
+    log_ln();
+    log_puts("PatchHeaders (RV32):"); log_ln();
+    log_puts("  link base: "); log_hex(base); log_ln();
+    log_puts("  image size: "); log_hex(size); log_ln();
+    log_puts("  heap start: "); log_hex(base + size); log_ln();
+    log_puts("  entry point: "); log_hex(entry); log_ln();
+    if (rs > 0) {
+        log_puts("  ram size: "); log_hex(rs); log_ln();
+    }
+    log_ln();
+}
+
+static bool rv32_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, int32_t size) {
+    (void)out; (void)base; (void)entry; (void)size;
+    return false; /* Multiboot is not supported on RISC-V */
+}
+
+/* ---- ArchOps table instances ---- */
+
+static const ArchOps arch_i386 = {
+    .name               = "i386",
+    .call_instr_size    = 5,    /* E8 + rel32 */
+    .halt_seq_size      = 4,    /* STI; NOP; JMP $-1 */
+    .PatchFunctionCall  = i386_PatchFunctionCall,
+    .WriteCallInstruction = i386_WriteCallInstruction,
+    .EmitHaltSequence   = i386_EmitHaltSequence,
+    .EmitStackPreamble  = i386_EmitStackPreamble,
+    .PatchImageHeader   = i386_PatchImageHeader,
+    .PatchMultibootHeader = i386_PatchMultibootHeader,
+};
+
+static const ArchOps arch_arm32 = {
+    .name               = "arm32",
+    .call_instr_size    = 4,    /* ARM BL */
+    .halt_seq_size      = 12,   /* CPSIE i; WFI; B . */
+    .PatchFunctionCall  = arm_PatchFunctionCall,
+    .WriteCallInstruction = arm_WriteCallInstruction,
+    .EmitHaltSequence   = arm_EmitHaltSequence,
+    .EmitStackPreamble  = arm_EmitStackPreamble,
+    .PatchImageHeader   = arm_PatchImageHeader,
+    .PatchMultibootHeader = arm_PatchMultibootHeader,
+};
+
+static const ArchOps arch_rv32 = {
+    .name               = "rv32",
+    .call_instr_size    = 4,    /* RV32 JAL ra */
+    .halt_seq_size      = 8,    /* WFI; J . */
+    .PatchFunctionCall  = rv32_PatchFunctionCall,
+    .WriteCallInstruction = rv32_WriteCallInstruction,
+    .EmitHaltSequence   = rv32_EmitHaltSequence,
+    .EmitStackPreamble  = rv32_EmitStackPreamble,
+    .PatchImageHeader   = rv32_PatchImageHeader,
+    .PatchMultibootHeader = rv32_PatchMultibootHeader,
+};
+
+/* ------------------------------------------------------------ */
+/* Generic fixup wrappers (delegate to arch) */
+
+static void fixup_call(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
+    arch->PatchFunctionCall(code, codeImgBase, link, target);
 }
 
 static void fixup_var(uint8_t *code, DataLinkEntry *dataLinks, int32_t linkIndex, int32_t fixval) {
@@ -733,6 +1188,12 @@ static void fix_ptr(Module *m) {
     for (int32_t i = 0; i < m->nofPtrs; i++) m->ptrTab[i] += e;
 }
 
+/* Map link table entry codes 253..246 to SysFix indices (newSF..UnlockSF).
+ * Entry 253 -> newSF (0), 252 -> sysnewSF (1), ..., 246 -> UnlockSF (7). */
+static int32_t sysfix_from_entry(uint8_t entry) {
+    return 253 - (int32_t)entry;  /* 253->0, 252->1, ..., 246->7 */
+}
+
 static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLinkEntry *dataLinks) {
     uint8_t *codebase = m->code;
     /* database is address of SB; here we model as data pointer + dataSize */
@@ -740,7 +1201,8 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
 
     for (int32_t i = 0; i < nofLinks; i++) {
         if (linkTab[i].mod == 0) {
-            switch (linkTab[i].entry) {
+            uint8_t entry = linkTab[i].entry;
+            switch (entry) {
             case 255: {
                 /* case table fixup in constant area */
                 uint16_t offs = linkTab[i].link;
@@ -761,97 +1223,17 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                 }
                 break;
             }
-            case 253: {
-                assert(SysFix[newSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[newSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 252: {
-                assert(SysFix[sysnewSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[sysnewSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 251: {
-                assert(SysFix[newarrSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[newarrSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 250: {
-                assert(SysFix[StartSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[StartSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 249: {
-                assert(SysFix[PassivateSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[PassivateSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 248: {
-                assert(SysFix[ActivateSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[ActivateSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 247: {
-                assert(SysFix[LockSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[LockSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
-                break;
-            }
-            case 246: {
-                assert(SysFix[UnlockSF].adr != 0);
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    (void)val;
-                    put_dword(codebase, offs, SysFix[UnlockSF].adr - (m->codeBase + offs + 4));
-                    offs = (uint16_t)msw(val);
-                }
+            case 253: case 252: case 251: case 250:
+            case 249: case 248: case 247: case 246: {
+                /* SysFix call fixups: newSF through UnlockSF */
+                int32_t sfIdx = sysfix_from_entry(entry);
+                sysfix_warning(sfIdx);
+                fixup_call(codebase, m->codeBase, linkTab[i].link, SysFix[sfIdx].adr);
                 break;
             }
             default: {
                 char buf[128];
-                snprintf(buf, sizeof(buf), "Unknown fixup entry %u", (unsigned)linkTab[i].entry);
+                snprintf(buf, sizeof(buf), "Unknown fixup entry %u", (unsigned)entry);
                 halt_msg(buf);
             }
             }
@@ -1420,77 +1802,52 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
     log_puts("Init block at "); log_hex(*entry); log_ln();
     assert(((*entry + 4) % Boundary) == 0);
 
+    /* Compute preamble size: the arch tells us how many bytes it will emit.
+     * i386:  MOV ESP,imm32 (5) + optional PUSH EBX (1) = 5 or 6
+     * ARM32: MOVW+MOVT SP (8) + optional PUSH {R2} (4) = 8 or 12
+     * RV32:  LUI+ADDI SP (8) + optional ADDI+SW (8) = 8 or 16 */
+    int32_t preamble_size = 0;
+    if (stack_size > 0) {
+        if (arch == &arch_i386)
+            preamble_size = multiboot ? 6 : 5;
+        else if (arch == &arch_arm32)
+            preamble_size = multiboot ? 12 : 8;
+        else
+            preamble_size = multiboot ? 16 : 8;
+    }
+
+    int32_t initCodeSize = nofEntryPoints * arch->call_instr_size + arch->halt_seq_size + preamble_size;
+
     int32_t adrPad = 0;
     int32_t sizePad = 0;
-    dump_ptr_header(out, *entry, nofEntryPoints * 5 + 4, &adrPad, &sizePad);
+    dump_ptr_header(out, *entry, initCodeSize, &adrPad, &sizePad);
     *entry += 28;
     assert(adrPad == 0);
 
     log_puts("Init code at "); log_hex(*entry); log_ln();
-    InitPointNode *i = initPointList;
-    int32_t base = *entry;
+    InitPointNode *ip = initPointList;
+    int32_t pc = *entry;
 
     if (stack_size > 0) {
-        // The stack starts at the very end of our allocated image.
-        // image_base + imageSize (which includes the stack_size we added in main)
-        int32_t initial_esp = image_base + imageSize;
-
-        uint8_t esp_code[5];
-        esp_code[0] = 0xBC; // Opcode for MOV ESP, imm32
-        put_dword(esp_code, 1, initial_esp);
-        write_bytes(out, esp_code, 5);
-        base += 5; // Advance our instruction pointer
-
-        if (multiboot) {
-            /* PUSH EBX  (53) — 1 byte: Multiboot info pointer */
-            write_u8(out, 0x53);
-            base += 1;
-
-            /* PUSH EAX  (50) — 1 byte: Multiboot magic number */
-            write_u8(out, 0x50);
-            base += 1;
-        }
+        /* The stack starts at the very end of our allocated image. */
+        int32_t initial_sp = image_base + imageSize;
+        int32_t emitted = arch->EmitStackPreamble(out, initial_sp, multiboot);
+        pc += emitted;
     }
 
-    uint8_t code[5];
-    code[0] = 0xE8;
-    while (i) {
-        log_puts("Body at "); log_hex(i->entryPoint); log_ln();
-        int32_t rel = i->entryPoint - (base + 5);
-        put_dword(code, 1, rel);
-        write_bytes(out, code, 5);
-        base += 5;
-        i = i->next;
+    while (ip) {
+        log_puts("Body at "); log_hex(ip->entryPoint); log_ln();
+        arch->WriteCallInstruction(out, ip->entryPoint, pc);
+        pc += arch->call_instr_size;
+        ip = ip->next;
     }
 
-    uint8_t tail[4] = {0xFB, 0x90, 0xEB, 0xFD};
-    write_bytes(out, tail, sizeof(tail));
+    arch->EmitHaltSequence(out);
     if (sizePad > 0) write_bytes(out, padding, (size_t)sizePad);
 }
 
 static void patch_header(FILE *out, int32_t base, int32_t entry, int32_t size) {
-    /* At file offset 0: E8 + rel32 */
-    seek_abs(out, 0);
-    write_u8(out, 0xE8);
-    write_i32_le(out, entry - (base + 5));
-
-    seek_abs(out, 6);
-    write_i32_le(out, base); /* LinkBase */
-
-    seek_abs(out, 22);
-    write_i32_le(out, base + size); /* HeapStart */
-
-    seek_abs(out, 30);
-    write_i32_le(out, 0); /* PatchSize */
-
-    log_ln();
-    log_puts("PatchHeaders:"); log_ln();
-    log_puts("  link base: "); log_hex(base); log_ln();
-    log_puts("  image size: "); log_hex(size); log_ln();
-    log_puts("  heap start: "); log_hex(base + size); log_ln();
-    log_puts("  entry point: "); log_hex(entry - (base + 5)); log_ln();
-    log_puts("  heap start: "); log_hex(base + size); log_ln();
-    log_ln();
+    arch->PatchImageHeader(out, base, entry, size, ramSize);
 }
 
 static void insert_pad(FILE *out, int32_t *pos, int32_t size, int32_t alignTo) {
@@ -1808,9 +2165,7 @@ static void dump_modules(FILE *out) {
         write_bytes(out, padding, (size_t)(m->expPadding + 4));
         next += m->expPadding + 4;
         assert((next % 32) == 0);
-        if (SysFix[expDescSF].adr == 0) {
-            fprintf(stderr, "warning: expDescSF not resolved\n");
-        }
+        sysfix_warning(expDescSF);
         dump_export(out, &m->exportTree, &next, SysFix[expDescSF].adr | 2);
         img.exportDesc.fp = m->exportTree.fp;
         img.exportDesc.adr = m->exportTree.adr;
@@ -1824,8 +2179,7 @@ static void dump_modules(FILE *out) {
         /* module descriptor */
         assert((next % Boundary) == 28);
         assert(next == m->modDescAdr - 4);
-        if( SysFix[modDescSF].adr == 0)
-            fprintf(stderr, "warning: modDescSF not resolved\n");
+        sysfix_warning(modDescSF);
         write_i32_le(out, SysFix[modDescSF].adr);
 
         /* Fill remaining DumpModuleDesc fields (addresses) */
@@ -1851,52 +2205,10 @@ static void dump_modules(FILE *out) {
     }
 }
 
-static void patch_multiboot_header(FILE *out, int32_t base, int32_t entry, int32_t size) {
-    // Multiboot magic numbers
-    uint32_t magic = 0x1BADB002;
-    // Flag bit 16 (0x10000) tells the bootloader this is a raw binary, not ELF,
-    // so it must use the addresses provided in the header.
-    uint32_t flags = 0x00010000;
-    uint32_t checksum = -(magic + flags);
-
-    // Multiboot header must be 4-byte aligned and within the first 8192 bytes.
-    seek_abs(out, 0);
-
-    // Magic fields
-    write_u32_le(out, magic);
-    write_u32_le(out, flags);
-    write_u32_le(out, checksum);
-
-    // AOUT kludge addresses
-    // Where this header itself is located in physical memory
-    uint32_t header_addr = base;
-    // Where the loadable part of the file starts in memory
-    uint32_t load_addr = base;
-    // Where the loadable part ends (base + total size)
-    uint32_t load_end_addr = base + size;
-    // BSS end (we have no separate BSS, so it's the same as load_end_addr)
-    uint32_t bss_end_addr = base + size;
-    // The entry point where the bootloader should jump (in 32-bit mode)
-    uint32_t entry_addr = entry;
-
-    write_u32_le(out, header_addr);
-    write_u32_le(out, load_addr);
-    write_u32_le(out, load_end_addr);
-    write_u32_le(out, bss_end_addr);
-    write_u32_le(out, entry_addr);
-
-    log_ln();
-    log_puts("PatchHeaders (Multiboot):"); log_ln();
-    log_puts("  load_addr: "); log_hex(load_addr); log_ln();
-    log_puts("  entry_addr: "); log_hex(entry_addr); log_ln();
-    log_ln();
-}
 
 static void build_image(const char *fileName, int32_t entryPoint, int32_t base, bool multiboot, bool enable_stack) {
-    if (SysFix[modDescSF].adr == 0)
-      fprintf(stderr, "warning: modDescSF not resolved (no Kernel.ModuleDesc)\n");
-    if (SysFix[listSF].adr == 0)
-      fprintf(stderr, "warning: listSF not resolved (no Kernel.modules)\n");
+    sysfix_warning(modDescSF);
+    sysfix_warning(listSF);
 
     log_puts("Building image : ");
     log_puts(fileName); log_puts("  "); log_ln();
@@ -1920,11 +2232,10 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
 
     int32_t size = (int32_t)tell_abs(out);
 
-    if (multiboot) {
-        // Overwrite the first 32 bytes with the Multiboot header
-        patch_multiboot_header(out, base, ep, size);
+    if (multiboot && arch->PatchMultibootHeader(out, base, ep, size)) {
+        /* Multiboot header written (i386) */
     } else {
-        // Standard Native Oberon header
+        /* Standard Native Oberon header (always for non-i386, or when --multiboot not set) */
         patch_header(out, base, ep, size);
     }
     
@@ -2077,10 +2388,27 @@ static void load_module(Module **m_out, const char *name, int32_t *base) {
     Module *m = find_module(name);
     if (!m) {
         char fname[1024];
-        if( get_extension(name) == NULL )
-            str_concat(name, extension, fname, sizeof(fname));
-        else
-            strcpy(fname,name);
+        if( get_extension(name) == NULL && strchr(name,'/') == NULL && strchr(name, '\\') == NULL )
+        {
+            if( modulePath )
+            {
+                const int pathLen = strlen(modulePath);
+                const int nameLen = strlen(name);
+                if( pathLen + 2 + nameLen + strlen(extension) > sizeof(fname) )
+                    halt_msg("path + module name + extension too long");
+                strcpy(fname, modulePath);
+                char* str = fname + pathLen;
+                if( *str != '/' && str != '\\' )
+                    (*str++) = '/';
+                strcpy(str, name);
+                str += nameLen;
+                strcpy(str, extension);
+                log_puts("module "); log_puts(name); log_puts(" in file ");
+                log_puts(fname); log_ln();
+            }else
+                str_concat(name, extension, fname, sizeof(fname));
+        }else
+            halt_msg("expecting module names, not file paths");
 
         FILE *f = fopen(fname, "rb");
         if (!f) {
@@ -2165,16 +2493,21 @@ static void apply_sysfix_overrides(const Options *opt) {
 
 static void usage(FILE *out) {
     fprintf(out,
-            "usage: bootlinker [options] <Module1> <Module2> ...\n"
+            "usage: multibootlinker [options] <Module1> <Module2> ...\n"
             "\n"
             "Options:\n"
-            "  -o <output>                  Name of the output file (default: image.bin\n"
+            "  --arch <target>              Target architecture: i386, arm32, rv32 (default: i386)\n"
+            "  -o <output>                  Name of the output file (default: image.bin)\n"
+            "  --path <path>                Path where the object files of the listed modules are (default: current directory)\n"
             "  --base <hex>                 The base address (default: 1MB in case of multiboot)\n"
             "  --obj-suffix <suffix>        Object file suffix (default: .Obj)\n"
             "  --log <path>                 Log path (default: <output>.Link)\n"
             "  --command <Module.Proc>      Extra init-call point (like /command)\n"
-            "  --multiboot                  Add a Multiboot header at the start of the file\n"
-            "  --enable-stack               Reserve and initialize the stack; push multiboot info if enabled\n"
+            "  --multiboot                  Enable boot info passing (pushes boot-info register;\n"
+            "                                 Multiboot header on i386, device tree on arm32/rv32)\n"
+            "  --enable-stack               Reserve and initialize the stack\n"
+            "  --ram-size <bytes>           RAM size hint for image header (arm32/rv32)\n"
+            "  --autofix                    Prepopulate sysfix targets from Kernel module\n"
             "  --sysfix <name>=<Mod.Proc>   Override sysfix target (e.g. new=Kernel.NewRec)\n"
             "  --trace / --no-trace         Enable/disable Trace logging\n"
             "  --trace-more                 Enable TraceMore logging\n");
@@ -2203,13 +2536,28 @@ static Options parse_args(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
 
-        if (strcmp(a, "-o") == 0 && i + 1 < argc) {
+        if (strcmp(a, "--arch") == 0 && i + 1 < argc) {
+            const char *name = argv[++i];
+            if (strcmp(name, "i386") == 0)
+                arch = &arch_i386;
+            else if (strcmp(name, "arm32") == 0 )
+                arch = &arch_arm32;
+            else if (strcmp(name, "rv32") == 0)
+                arch = &arch_rv32;
+            else {
+                fprintf(stderr, "Error: unknown architecture '%s'\n", name);
+                fprintf(stderr, "       supported: i386, arm32, rv32\n");
+                exit(2);
+            }
+        } else if (strcmp(a, "-o") == 0 && i + 1 < argc) {
             opt.output = argv[++i];
         } else if (strcmp(a, "--base") == 0 && i + 1 < argc) {
             if (!parse_hex_i32(argv[++i], &opt.base))
                 halt_msg("invalid --base");
         } else if (strcmp(a, "--log") == 0 && i + 1 < argc) {
             opt.log = argv[++i];
+        } else if (strcmp(a, "--path") == 0 && i + 1 < argc) {
+            modulePath = argv[++i];
         } else if (strcmp(a, "--obj-suffix") == 0 && i + 1 < argc) {
             opt.obj_suffix = argv[++i];
         } else if (strcmp(a, "--command") == 0 && i + 1 < argc) {
@@ -2218,6 +2566,13 @@ static Options parse_args(int argc, char **argv) {
             opt.multiboot = true;
         } else if (strcmp(a, "--enable-stack") == 0) {
             opt.enable_stack = true;
+        } else if (strcmp(a, "--ram-size") == 0 && i + 1 < argc) {
+            errno = 0;
+            char *end = NULL;
+            long v = strtol(argv[++i], &end, 0);
+            if (errno != 0 || !end || *end != 0 || v <= 0)
+                halt_msg("invalid --ram-size");
+            ramSize = (int32_t)v;
         } else if (strcmp(a, "--sysfix") == 0 && i + 1 < argc) {
             const char *kv = argv[++i];
             const char *eq = strchr(kv, '=');
@@ -2274,12 +2629,19 @@ int main(int argc, char **argv) {
     {
         uint32_t endian_test = 1;
         if (*(uint8_t *)&endian_test != 1) {
-            fprintf(stderr, "bootlinker: this tool requires a little-endian host\n");
+            fprintf(stderr, "multibootlinker: this tool requires a little-endian host\n");
             return 1;
         }
     }
 
-    initialise();
+    bool autofix = false;
+    for (int i = 1; i < argc; i++ )
+        if (strcmp(argv[i],"--autofix") == 0)
+        {
+            autofix = true;
+            break;
+        }
+    initialise(autofix);
 
     Options opt = parse_args(argc, argv);
     if (!opt.output || opt.base < 0 || opt.module_count == 0) {
@@ -2293,6 +2655,11 @@ int main(int argc, char **argv) {
 
     if ((opt.base % PageSize) != 0) {
         halt_msg("Image base must be a multiple of machine memory page size");
+    }
+
+    if (opt.multiboot && !opt.enable_stack) {
+        fprintf(stderr, "Error: --multiboot requires --enable-stack\n");
+        return 2;
     }
 
     apply_sysfix_overrides(&opt);
