@@ -1829,8 +1829,12 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
     int32_t pc = *entry;
 
     if (stack_size > 0) {
-        /* The stack starts at the very end of our allocated image. */
-        int32_t initial_sp = image_base + imageSize;
+        /* SP must point past the entire image including init code and stack.
+         * At this point imageSize covers modules + stack (set in main),
+         * but not the init block we are writing now.  Add the init block:
+         * 28 (ptr header) + initCodeSize + sizePad. */
+        int32_t initBlockSize = 28 + initCodeSize + sizePad;
+        int32_t initial_sp = image_base + imageSize + initBlockSize;
         int32_t emitted = arch->EmitStackPreamble(out, initial_sp, multiboot);
         pc += emitted;
     }
@@ -2702,6 +2706,11 @@ int main(int argc, char **argv) {
             halt_msg("Procedure in --command not found");
         }
     }
+
+    /* imageSize tracks total image extent relative to imageBase.
+     * load_module_body updates *base but not the global imageSize,
+     * so we must sync it here from the running base pointer. */
+    imageSize = base - imageBase;
 
     int32_t stack_size = 0;
     if (opt.enable_stack) {
