@@ -33,6 +33,7 @@ MODULE OPIR;
   cli* = 3168; sti* = 3200; in* = 3232; out* = 3264;
   assembler* = 3296;
   clear*= 3328; std*= 3392;
+  dmb* = 3456;   (* memory barrier, ARM DMB ISH; no-op on i386/RV32 *)
 
   (* floating point operations *)
   fload*= 2528; fstore* = 2560; fist*= 2592; fild* = 2624;

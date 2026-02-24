@@ -1531,6 +1531,7 @@ Intel i386 :
   ELSE load (x)
   END;
   OPIR.Instr [pc-1].abs := constAddr & getfn;   (* if x is the address and a constant, no fixup *) (* GetPut *)
+  IF ~getfn THEN Gen0(OPIR.dmb) END;  (* ensures the loaded value is visible before we act on it *)
   IF z.mode = VarPar THEN
    loadAdr (z); z.mode := RegRel
   ELSE CompleteSL (z)
@@ -1538,7 +1539,8 @@ Intel i386 :
   IF form IN realSet THEN GenStore (fstore, z, x)
   ELSE GenStore (store, z, x)
   END;
-  OPIR.Instr [pc-1].abs := constAddr & ~getfn   (* if z is the address and a constant, no fixup *) (* GetPut *)
+  OPIR.Instr [pc-1].abs := constAddr & ~getfn;   (* if z is the address and a constant, no fixup *) (* GetPut *)
+  IF getfn THEN Gen0(OPIR.dmb) END; 
  END SYSgetput;
 
  PROCEDURE SYSportio* (VAR z, x: Item; pin: BOOLEAN); (* SYSTEM.PORTIN, SYSTEM.PORTOUT *)(* New Functions *)

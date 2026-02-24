@@ -175,6 +175,7 @@ newStat begin of a new statement 3136 - text pos - -
  cli* = OPIR.cli; sti* = OPIR.sti; in* = OPIR.in; out* = OPIR.out;
  assembler* = OPIR.assembler;
  clear*= OPIR.clear; std*= OPIR.std;
+ dmb* = OPIR.dmb;
 
  (* floating point - defined in OPIR *)
  fload*= OPIR.fload; fstore* = OPIR.fstore; fist*= OPIR.fist; fild* = OPIR.fild;
@@ -208,6 +209,7 @@ newStat begin of a new statement 3136 - text pos - -
  Cli = cli DIV 32; Sti = sti DIV 32; In = in DIV 32; Out = out DIV 32;
  Assembler = assembler DIV 32;
  Clear = clear DIV 32; Std = std DIV 32;
+ Dmb = dmb DIV 32;
 
  (* floating point *)
  FLoad= fload DIV 32; FStore = fstore DIV 32; Fist= fist DIV 32; Fild = fild DIV 32;
@@ -2627,6 +2629,7 @@ ASSERT(~loaded(instr.dest));
       | In, Out: GenPortIO(OPIR.Instr [i])
       | Assembler: GenAsm(OPIR.Instr[i])
       | Clear: ClearSDynArr(OPIR.Instr[i])
+      | Dmb: (* ignore in i386 *)
     ELSE HALT (BUG)
     END
    END;
