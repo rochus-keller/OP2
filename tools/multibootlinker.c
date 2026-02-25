@@ -884,9 +884,28 @@ static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
 /* ---- ARMv6/v7 ---- */
 
 static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
-    while (link != 0xFFFF) {
+    /* ARM compiler stores the fixup chain in the low 24 bits of BL instructions.
+     * Sentinel is 0xFFFFFF (24-bit all-ones), NOT the i386 sentinel 0xFFFF.
+     * For small offsets (<0x8000): chain value = byte offset directly.
+     * For large offsets (>=0x8000): chain value = ((offset - 0x10000) * 4) MOD 0x1000000,
+     *   which means values >= 0x800000 encode negative 16-bit offsets. */
+    while (link >= 0) {
         int32_t instr = get_dword(code, link);
-        int32_t nextlink = msw(instr);
+        /* Extract chain link from low 24 bits of BL instruction */
+        int32_t imm24 = instr & 0x00FFFFFF;
+        int32_t nextlink;
+        if (imm24 == 0xFFFFFF) {
+            /* Sentinel: end of chain */
+            nextlink = -1;
+        } else if (imm24 >= 0x800000) {
+            /* Large offset: decode ((offset - 0x10000) * 4) MOD 0x1000000 */
+            /* Reverse: offset = (imm24 as signed 24-bit) / 4 + 0x10000 */
+            int32_t signed24 = imm24 - 0x1000000; /* sign-extend 24->32 bit */
+            nextlink = signed24 / 4 + 0x10000;
+        } else {
+            /* Small offset: chain value is the byte offset directly */
+            nextlink = imm24;
+        }
         /* ARM BL: offset = (target - (PC + 8)) >> 2, encoded in low 24 bits */
         int32_t offset = (target - (codeImgBase + link + 8)) >> 2;
         int32_t bl = (int32_t)0xEB000000u | (offset & 0x00FFFFFF);
@@ -984,6 +1003,148 @@ static void arm_PatchImageHeader(FILE *out, int32_t base, int32_t entry,
 static bool arm_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, int32_t size) {
     (void)out; (void)base; (void)entry; (void)size;
     return false; /* Multiboot is not supported on ARM */
+}
+
+/* Encode a 32-bit value as an ARM rotated immediate (imm12).
+ * ARM data-processing immediate: operand2 = (rotate4 << 8) | imm8,
+ * decoded value = ROR(imm8, rotate4 * 2).
+ * Returns the 12-bit encoded value, or -1 if not representable. */
+static int32_t arm_encode_imm12(uint32_t val) {
+    if (val == 0) return 0;
+    for (int rot = 0; rot < 16; rot++) {
+        /* Rotate val LEFT by rot*2 to undo the ROR decoding */
+        int shift = rot * 2;
+        uint32_t test;
+        if (shift == 0) {
+            test = val;
+        } else {
+            test = (val << shift) | (val >> (32 - shift));
+        }
+        if (test <= 0xFF) {
+            return (rot << 8) | (int32_t)test;
+        }
+    }
+    return -1;
+}
+
+/* Decode an ARM rotated immediate (imm12) to its 32-bit value.
+ * imm12 = (rotate4 << 8) | imm8, value = ROR(imm8, rotate4 * 2). */
+static uint32_t arm_decode_imm12(uint32_t imm12) {
+    uint32_t rot = (imm12 >> 8) & 0xF;
+    uint32_t imm8 = imm12 & 0xFF;
+    if (rot == 0) return imm8;
+    uint32_t shift = rot * 2;
+    return (imm8 >> shift) | (imm8 << (32 - shift));
+}
+
+/* ARM-specific VarConsLink data fixup.
+ *
+ * On i386, the fixup location contains a plain 32-bit displacement (the
+ * SB-relative offset of the data item).  The linker simply adds the module's
+ * static base (m->sb) to turn it into an absolute address.  This works
+ * because i386 uses absolute addressing.
+ *
+ * On ARM, the fixup location contains a full 32-bit ARM instruction (e.g.
+ * ADD/SUB Rd, PC, #imm or LDR Rd, [PC, #off]).  The linker must:
+ *   1.  Decode the instruction to extract the embedded data offset.
+ *   2.  Compute the absolute target address (data_offset + fixval).
+ *   3.  Compute the PC-relative offset (target - (codeBase + off + 8)).
+ *   4.  Re-encode the instruction with the correct PC-relative offset,
+ *       choosing ADD vs SUB depending on sign.
+ *
+ * Supported instruction classes:
+ *   - Data-processing immediate  (bits [27:25] = 001)
+ *   - LDR/STR immediate offset   (bits [27:26] = 01, I=0)
+ *   - Anything else is treated as a raw 32-bit literal (val + fixval).
+ */
+static void arm_fixup_data_at(uint8_t *code, int32_t off,
+                              int32_t codeBase, int32_t fixval) {
+    uint32_t instr = (uint32_t)get_dword(code, off);
+    uint32_t bits27_25 = (instr >> 25) & 0x7;
+
+    if (bits27_25 == 1) {
+        /* ---- Data-processing immediate (I=1) ----
+         * cond[31:28] 00 1 opcode[24:21] S[20] Rn[19:16] Rd[15:12] imm12[11:0] */
+        uint32_t Rd   = (instr >> 12) & 0xF;
+        uint32_t imm12 = instr & 0xFFF;
+        uint32_t data_offset = arm_decode_imm12(imm12);
+
+        /* Absolute target address */
+        int32_t target = (int32_t)data_offset + fixval;
+
+        /* PC at this instruction (ARM pipeline: PC = addr + 8) */
+        int32_t pc  = codeBase + off + 8;
+        int32_t rel = target - pc;
+
+        uint32_t opcode;   /* ADD = 4, SUB = 2 */
+        uint32_t abs_rel;
+        if (rel >= 0) {
+            opcode  = 4;  /* ADD */
+            abs_rel = (uint32_t)rel;
+        } else {
+            opcode  = 2;  /* SUB */
+            abs_rel = (uint32_t)(-rel);
+        }
+
+        int32_t enc = arm_encode_imm12(abs_rel);
+        if (enc < 0) {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                "ARM data fixup: offset %d (0x%X) not encodable as "
+                "rotated immediate", rel, abs_rel);
+            halt_msg(buf);
+        }
+
+        /* cond=AL, data-proc imm, opcode, S=0, Rn=PC, Rd, imm12 */
+        uint32_t new_instr = 0xE2000000u | (opcode << 21) |
+                             (0xFu << 16) | (Rd << 12) | (uint32_t)enc;
+        put_dword(code, off, (int32_t)new_instr);
+
+    } else if (((instr >> 26) & 0x3) == 1 && ((instr >> 25) & 1) == 0) {
+        /* ---- LDR/STR immediate offset (I=0) ----
+         * cond[31:28] 01 0 P[24] U[23] B[22] W[21] L[20]
+         * Rn[19:16] Rd[15:12] offset12[11:0] */
+        uint32_t offset12 = instr & 0xFFF;
+        uint32_t U = (instr >> 23) & 1;
+        int32_t signed_off = U ? (int32_t)offset12 : -(int32_t)offset12;
+
+        int32_t target = signed_off + fixval;
+        int32_t pc  = codeBase + off + 8;
+        int32_t rel = target - pc;
+
+        uint32_t new_U;
+        uint32_t abs_rel;
+        if (rel >= 0) {
+            new_U   = 1;
+            abs_rel = (uint32_t)rel;
+        } else {
+            new_U   = 0;
+            abs_rel = (uint32_t)(-rel);
+        }
+
+        if (abs_rel >= 0x1000) {
+            halt_msg("ARM data fixup: LDR/STR PC-relative offset too large");
+        }
+
+        /* Reconstruct keeping cond, P, B, W, L; update U, Rn=PC, offset */
+        uint32_t cond = (instr >> 28) & 0xF;
+        uint32_t P    = (instr >> 24) & 1;
+        uint32_t B    = (instr >> 22) & 1;
+        uint32_t W    = (instr >> 21) & 1;
+        uint32_t L    = (instr >> 20) & 1;
+        uint32_t Rd   = (instr >> 12) & 0xF;
+
+        uint32_t new_instr = (cond << 28) | (1u << 26) |
+                             (P << 24) | (new_U << 23) | (B << 22) |
+                             (W << 21) | (L << 20) |
+                             (0xFu << 16) | (Rd << 12) | (abs_rel & 0xFFF);
+        put_dword(code, off, (int32_t)new_instr);
+
+    } else {
+        /* Raw 32-bit literal (e.g. from inline-assembly PutWordAt) —
+         * treat like i386: add fixval directly. */
+        put_dword(code, off, (int32_t)(instr + (uint32_t)fixval));
+    }
 }
 
 /* ---- RV32 (RISC-V 32-bit) ---- */
@@ -1150,12 +1311,17 @@ static void fixup_call(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t
     arch->PatchFunctionCall(code, codeImgBase, link, target);
 }
 
-static void fixup_var(uint8_t *code, DataLinkEntry *dataLinks, int32_t linkIndex, int32_t fixval) {
+static void fixup_var(uint8_t *code, DataLinkEntry *dataLinks, int32_t linkIndex,
+                      int32_t fixval, int32_t codeBase) {
     int16_t nofFixups = dataLinks[linkIndex].nofFixups;
     for (int32_t i = 0; i < nofFixups; i++) {
         int32_t off = (int32_t)dataLinks[linkIndex].offset[i];
-        int32_t val = get_dword(code, off);
-        put_dword(code, off, val + fixval);
+        if (arch == &arch_arm32) {
+            arm_fixup_data_at(code, off, codeBase, fixval);
+        } else {
+            int32_t val = get_dword(code, off);
+            put_dword(code, off, val + fixval);
+        }
     }
 }
 
@@ -1167,8 +1333,12 @@ static void fix_data_links(Module *m, DataLinkEntry *dataLinks) {
     if (modNo == 0) {
         for (int32_t i = 0; i < nofFixups; i++) {
             int32_t off = (int32_t)dataLinks[0].offset[i];
-            int32_t val = get_dword(codebase, off);
-            put_dword(codebase, off, val + m->sb);
+            if (arch == &arch_arm32) {
+                arm_fixup_data_at(codebase, off, m->codeBase, m->sb);
+            } else {
+                int32_t val = get_dword(codebase, off);
+                put_dword(codebase, off, val + m->sb);
+            }
         }
     }
 }
@@ -1692,7 +1862,7 @@ static void read_ref(FILE *f, Module *m) {
 static void check_use_block(FILE *f, Module *M, DataLinkEntry *dataLinks);
 
 static void fixup_var_for_use(Module *M, DataLinkEntry *dataLinks, int32_t link, int32_t fixval) {
-    fixup_var(M->code, dataLinks, link, fixval);
+    fixup_var(M->code, dataLinks, link, fixval, M->codeBase);
 }
 
 static void fixup_call_for_use(Module *M, int32_t link, int32_t fixval) {
