@@ -43,7 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------ */
+/* */
 /* Constants (from BootLinker.Mod) */
 
 enum {
@@ -109,7 +109,7 @@ enum {
 static bool Trace = true;
 static bool TraceMore = false;
 
-/* ------------------------------------------------------------ */
+/* */
 /* Basic types */
 
 typedef char Name[32];
@@ -292,7 +292,7 @@ typedef struct {
     int32_t term;
 } DumpModuleDesc;
 
-/* ------------------------------------------------------------ */
+/* */
 /* Architecture abstraction */
 
 typedef struct ArchOps ArchOps;
@@ -337,7 +337,7 @@ struct ArchOps {
 static const ArchOps arch_i386, arch_arm32, arch_rv32;
 static const ArchOps *arch = &arch_i386; /* default */
 
-/* ------------------------------------------------------------ */
+/* */
 /* Globals */
 
 static SysFixEntry SysFix[MaxSF];
@@ -380,7 +380,7 @@ enum {
     incompImport = 16,
 };
 
-/* ------------------------------------------------------------ */
+/* */
 /* Utility: logging */
 
 static void log_close(void);
@@ -492,7 +492,7 @@ static void sysfix_warning(int i) {
     }
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Utility: string handling */
 
 static void str_concat(const char *s1, const char *s2, char *out, size_t out_sz) {
@@ -517,7 +517,7 @@ static void extract_names(const char *in, char *module, size_t module_sz, char *
     snprintf(proc, proc_sz, "%s", dot + 1);
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Utility: endian read/write */
 
 static uint8_t read_u8(FILE *f) {
@@ -631,7 +631,7 @@ static long tell_abs(FILE *f) {
     return p;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Utility: arithmetic */
 
 static int32_t align_up(int32_t num, int32_t boundary) {
@@ -652,7 +652,7 @@ static int32_t and32(int32_t x, int32_t y) {
     return (int32_t)((uint32_t)x & (uint32_t)y);
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Module list handling */
 
 static Module *find_module(const char *name) {
@@ -690,7 +690,7 @@ static void add_init_point(int32_t entryPoint, Module *object) {
     nofEntryPoints++;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* SysFix initialization */
 
 static void init_sysfix(int idx, const char *name, const char *module, const char *command, bool autofix) {
@@ -744,7 +744,7 @@ static void initialise(bool autofix) {
     moduleDescSize += mDescPadSize;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Fixup helpers (operate on in-memory code/data arrays) */
 
 static void put_dword(uint8_t *code, int32_t idx, int32_t value) {
@@ -760,10 +760,10 @@ static int32_t get_dword(const uint8_t *code, int32_t idx) {
             ((uint32_t)code[idx + 2] << 16) | ((uint32_t)code[idx + 3] << 24));
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Architecture-specific implementations */
 
-/* ---- i386 ---- */
+/* i386 */
 
 static void i386_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     int32_t instr, nextlink, jmp;
@@ -881,7 +881,7 @@ static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
     return true;
 }
 
-/* ---- ARMv6/v7 ---- */
+/* ARMv6/v7 */
 
 static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     /* ARM compiler stores the fixup chain in the low 24 bits of BL instructions.
@@ -1060,11 +1060,43 @@ static uint32_t arm_decode_imm12(uint32_t imm12) {
 static void arm_fixup_data_at(uint8_t *code, int32_t off,
                               int32_t codeBase, int32_t fixval) {
     uint32_t instr = (uint32_t)get_dword(code, off);
-    uint32_t bits27_25 = (instr >> 25) & 0x7;
+    uint32_t bits27_20 = (instr >> 20) & 0xFF;
 
-    if (bits27_25 == 1) {
-        /* ---- Data-processing immediate (I=1) ----
-         * cond[31:28] 00 1 opcode[24:21] S[20] Rn[19:16] Rd[15:12] imm12[11:0] */
+    if (bits27_20 == 0x30) {
+        /* MOVW (move wide, 16-bit immediate)
+         * Encoding: cond[31:28] 0011_0000 imm4[19:16] Rd[15:12] imm12[11:0]
+         * The compiler emits MOVW+MOVT pairs for absolute data references.
+         * MOVW is at 'off', MOVT is at 'off+4'.
+         * Extract the 32-bit data offset, add fixval, write back. */
+        uint32_t Rd = (instr >> 12) & 0xF;
+        uint32_t lo16 = ((instr >> 4) & 0xF000) | (instr & 0xFFF);
+
+        /* Read the MOVT at off+4 */
+        uint32_t instr2 = (uint32_t)get_dword(code, off + 4);
+        uint32_t hi16 = ((instr2 >> 4) & 0xF000) | (instr2 & 0xFFF);
+
+        /* Original data offset (32-bit) */
+        uint32_t data_offset = (hi16 << 16) | lo16;
+
+        /* Add fixval to get absolute address */
+        uint32_t abs_addr = data_offset + (uint32_t)fixval;
+
+        /* Write back patched MOVW (lower 16 bits) */
+        uint32_t new_lo16 = abs_addr & 0xFFFF;
+        uint32_t new_movw = 0xE3000000u | (Rd << 12) |
+                            ((new_lo16 & 0xF000) << 4) | (new_lo16 & 0xFFF);
+        put_dword(code, off, (int32_t)new_movw);
+
+        /* Write back patched MOVT (upper 16 bits) */
+        uint32_t new_hi16 = (abs_addr >> 16) & 0xFFFF;
+        uint32_t new_movt = 0xE3400000u | (Rd << 12) |
+                            ((new_hi16 & 0xF000) << 4) | (new_hi16 & 0xFFF);
+        put_dword(code, off + 4, (int32_t)new_movt);
+
+    } else if (((instr >> 25) & 0x7) == 1) {
+        /* Data-processing immediate (I=1) 
+         * cond[31:28] 00 1 opcode[24:21] S[20] Rn[19:16] Rd[15:12] imm12[11:0]
+         * Legacy path for old-style ADD/SUB Rd, PC, #imm data refs */
         uint32_t Rd   = (instr >> 12) & 0xF;
         uint32_t imm12 = instr & 0xFFF;
         uint32_t data_offset = arm_decode_imm12(imm12);
@@ -1101,7 +1133,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
         put_dword(code, off, (int32_t)new_instr);
 
     } else if (((instr >> 26) & 0x3) == 1 && ((instr >> 25) & 1) == 0) {
-        /* ---- LDR/STR immediate offset (I=0) ----
+        /* LDR/STR immediate offset (I=0) 
          * cond[31:28] 01 0 P[24] U[23] B[22] W[21] L[20]
          * Rn[19:16] Rd[15:12] offset12[11:0] */
         uint32_t offset12 = instr & 0xFFF;
@@ -1147,7 +1179,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
     }
 }
 
-/* ---- RV32 (RISC-V 32-bit) ---- */
+/* RV32 (RISC-V 32-bit) */
 
 /* Encode a RISC-V J-type immediate (for JAL).
  * The 21-bit signed offset is encoded as: imm[20|10:1|11|19:12] in bits [31:12]. */
@@ -1266,7 +1298,7 @@ static bool rv32_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
     return false; /* Multiboot is not supported on RISC-V */
 }
 
-/* ---- ArchOps table instances ---- */
+/* ArchOps table instances */
 
 static const ArchOps arch_i386 = {
     .name               = "i386",
@@ -1304,7 +1336,7 @@ static const ArchOps arch_rv32 = {
     .PatchMultibootHeader = rv32_PatchMultibootHeader,
 };
 
-/* ------------------------------------------------------------ */
+/* */
 /* Generic fixup wrappers (delegate to arch) */
 
 static void fixup_call(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
@@ -1416,7 +1448,7 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
     (void)dataLinks;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Ref table parsing (FindAdr) */
 
 static void get_num_from_refs(const uint8_t *refs, int32_t *i, int32_t *num) {
@@ -1484,7 +1516,7 @@ static int32_t find_adr(Module *mod, const char *pat, int32_t type) {
     return 0;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Export table utilities */
 
 static void assign_export_sizes(ExportDesc *exp, Module *m) {
@@ -1550,7 +1582,7 @@ static void init_types(Module *m) {
     for (int32_t i = 0; i < m->nofTds; i++) init_type(m, i);
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Object file block readers */
 
 static void expect_tag(FILE *f, uint8_t tag, const char *modName) {
@@ -1856,7 +1888,7 @@ static void read_ref(FILE *f, Module *m) {
     read_bytes(f, m->refs, (size_t)m->refSize-1);
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Use block checking (linking imported refs) */
 
 static void check_use_block(FILE *f, Module *M, DataLinkEntry *dataLinks);
@@ -1948,7 +1980,7 @@ static void read_use(FILE *f, Module *m, DataLinkEntry *dataLinks) {
     check_use_block(f, m, dataLinks);
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Dumping / image writing */
 
 static void dump_ptr_header(FILE *out, int32_t address, int32_t size, int32_t *adrPad, int32_t *sizePad) {
@@ -2163,7 +2195,7 @@ static void dump_modules(FILE *out) {
         int32_t tag = next + 4;
 
         log_ln();
-        log_puts("--------- MODULE "); log_puts(m->name); log_ln();
+        log_puts("-MODULE "); log_puts(m->name); log_ln();
         dump_addr(next, "Base");
 
         assert(((next + 4) % Boundary) == 0);
@@ -2424,7 +2456,7 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
     log_puts("expDesc is "); log_puts(SysFix[expDescSF].module); log_puts("."); log_puts(SysFix[expDescSF].command); log_hex(SysFix[expDescSF].adr); log_ln();
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* LoadModule / Load */
 
 static void load_module_body(FILE *f, Module *m, int32_t *base) {
@@ -2628,7 +2660,7 @@ static void load_module(Module **m_out, const char *name, int32_t *base) {
     *m_out = m;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* CLI */
 
 typedef struct {
@@ -2673,7 +2705,7 @@ static void usage(FILE *out) {
             "  --arch <target>              Target architecture: i386, arm32, rv32 (default: i386)\n"
             "  -o <output>                  Name of the output file (default: image.bin)\n"
             "  --path <path>                Path where the object files of the listed modules are (default: current directory)\n"
-            "  --base <hex>                 The base address (default: 1MB in case of multiboot)\n"
+            "  --base <hex>                 The base address (default: 0x10000 for arm32/rv32, 0x100000 for i386)\n"
             "  --obj-suffix <suffix>        Object file suffix (default: .Obj)\n"
             "  --log <path>                 Log path (default: <output>.Link)\n"
             "  --command <Module.Proc>      Extra init-call point (like /command)\n"
@@ -2781,10 +2813,17 @@ static Options parse_args(int argc, char **argv) {
         }
     }
 
-    if( opt.multiboot && opt.base < 0 )
-        opt.base = 0x100000; // default to 1MB
-    else if (opt.base < 0)
-        fprintf(stderr, "Error: --base is required when not using --multiboot\n");
+    if( opt.base < 0 ) {
+        if( opt.multiboot ) {
+            /* ARM32/RV32 QEMU -kernel loads at 0x10000; i386 multiboot at 0x100000 */
+            if( arch == &arch_arm32 || arch == &arch_rv32 )
+                opt.base = 0x10000;
+            else
+                opt.base = 0x100000;
+        } else {
+            fprintf(stderr, "Error: --base is required when not using --multiboot\n");
+        }
+    }
 
     if( opt.output == 0 )
         opt.output = "image.bin";
@@ -2795,7 +2834,7 @@ static Options parse_args(int argc, char **argv) {
     return opt;
 }
 
-/* ------------------------------------------------------------ */
+/* */
 /* Main */
 
 int main(int argc, char **argv) {

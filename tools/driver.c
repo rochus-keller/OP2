@@ -55,7 +55,7 @@ static void print_help(const char *prog)
     printf("  -O, --prefix <pfx>     Output file-name prefix.\n");
     printf("                         Maps to ParseOptions 'O' token.\n");
     printf("                         Mutually exclusive with --use-mod-prefix.\n");
-    printf("      --ext <ext>        Output file extension incl. dot (default: .Mod).\n");
+    printf("      --ext <ext>        Output file extension incl. dot (default: .Obj).\n");
     printf("                         Maps to ParseOptions '.' token. Max %d chars.\n", MAX_EXT_LEN);
     printf("  -X, --use-mod-prefix   Use the module-name qualifier as the output prefix.\n");
     printf("                         Mutually exclusive with --prefix.\n\n");
@@ -276,6 +276,9 @@ int main(int argc, char **argv)
         /* The '.' token handler in ParseOptions includes the dot in the
          * stored extension, so we pass it as-is (output_ext[0] == '.'). */
         opos = opts_append_str(opts, opos, output_ext);
+        ADDOPT(' ');
+    } else {
+        opos = opts_append_str(opts, opos, ".Obj");
         ADDOPT(' ');
     }
     /* opts[opos] is already 0 (zero-init). */
