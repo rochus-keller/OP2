@@ -82,6 +82,18 @@ MODULE OPIR;
   LockIndex* = 7; LockEntryNr* = 247;
   UnlockIndex* = 8; UnlockEntryNr* = 246;
 
+  (* Software arithmetic sysfixes — used when hardware support is absent *)
+  DivModLinkIndex* = 9;   DivModEntryNr* = 245;   (* integer DIV/MOD *)
+  F64AddLinkIndex* = 10;  F64AddEntryNr* = 244;   (* LONGREAL + *)
+  F64SubLinkIndex* = 11;  F64SubEntryNr* = 243;   (* LONGREAL - *)
+  F64MulLinkIndex* = 12;  F64MulEntryNr* = 242;   (* LONGREAL * *)
+  F64DivLinkIndex* = 13;  F64DivEntryNr* = 241;   (* LONGREAL / *)
+  F64CmpLinkIndex* = 14;  F64CmpEntryNr* = 240;   (* LONGREAL compare *)
+  F64CvtIFLinkIndex* = 15; F64CvtIFEntryNr* = 239; (* INT to LONGREAL *)
+  F64CvtFILinkIndex* = 16; F64CvtFIEntryNr* = 238; (* LONGREAL to INT *)
+  F64NegLinkIndex* = 17;  F64NegEntryNr* = 237;   (* LONGREAL negation *)
+  F64AbsLinkIndex* = 18;  F64AbsEntryNr* = 236;   (* LONGREAL ABS *)
+
   Nil* = OPM.LANotAlloc; (* for Instr[..].pc initialization *)
   
  TYPE

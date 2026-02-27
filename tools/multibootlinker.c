@@ -43,7 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* */
+/* ------------------------------------------------------------ */
 /* Constants (from BootLinker.Mod) */
 
 enum {
@@ -56,6 +56,8 @@ enum {
     ActivateSF = 5,     // "activate", ""
     LockSF = 6,         // "lock", ""
     UnlockSF = 7,       // "unlock", ""
+    divmodSF = 8,       // "divmod", "DivSupport.DivMod32"
+    /* 9 reserved (was newsysarrSF) */
     copyarraySF = 10,
     CurProcSF = 11,     // "", ""
     commandSF = 12,     // "command", ""
@@ -63,13 +65,17 @@ enum {
     modDescSF = 14,     // "mdesc", "Kernel.ModuleDesc"
     expDescSF = 15,     // "expdesc", "Kernel.ExportDesc"
     objectSF = 16,      // "", ""
-    MaxSF = 17,
-
-    /*
-     * Unused:
-     * CheckSF = 8;
-     * newsysarrSF = 9;
-    */
+    /* Software arithmetic sysfixes (for future F64 soft-float) */
+    f64addSF = 17,      // "f64add", soft-float64 add
+    f64subSF = 18,      // "f64sub", soft-float64 sub
+    f64mulSF = 19,      // "f64mul", soft-float64 mul
+    f64divSF = 20,      // "f64div", soft-float64 div
+    f64cmpSF = 21,      // "f64cmp", soft-float64 compare
+    f64cvtifSF = 22,    // "f64cvtif", int-to-float64
+    f64cvtfiSF = 23,    // "f64cvtfi", float64-to-int
+    f64negSF = 24,      // "f64neg", soft-float64 negate
+    f64absSF = 25,      // "f64abs", soft-float64 abs
+    MaxSF = 26,
     // automatically resolved from Kernel module:
     // newSf..copyarraySF, CurProcSF, listSF, modDescSF, expDescSF
 
@@ -109,7 +115,7 @@ enum {
 static bool Trace = true;
 static bool TraceMore = false;
 
-/* */
+/* ------------------------------------------------------------ */
 /* Basic types */
 
 typedef char Name[32];
@@ -292,7 +298,7 @@ typedef struct {
     int32_t term;
 } DumpModuleDesc;
 
-/* */
+/* ------------------------------------------------------------ */
 /* Architecture abstraction */
 
 typedef struct ArchOps ArchOps;
@@ -337,7 +343,7 @@ struct ArchOps {
 static const ArchOps arch_i386, arch_arm32, arch_rv32;
 static const ArchOps *arch = &arch_i386; /* default */
 
-/* */
+/* ------------------------------------------------------------ */
 /* Globals */
 
 static SysFixEntry SysFix[MaxSF];
@@ -380,7 +386,7 @@ enum {
     incompImport = 16,
 };
 
-/* */
+/* ------------------------------------------------------------ */
 /* Utility: logging */
 
 static void log_close(void);
@@ -492,7 +498,7 @@ static void sysfix_warning(int i) {
     }
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Utility: string handling */
 
 static void str_concat(const char *s1, const char *s2, char *out, size_t out_sz) {
@@ -517,7 +523,7 @@ static void extract_names(const char *in, char *module, size_t module_sz, char *
     snprintf(proc, proc_sz, "%s", dot + 1);
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Utility: endian read/write */
 
 static uint8_t read_u8(FILE *f) {
@@ -631,7 +637,7 @@ static long tell_abs(FILE *f) {
     return p;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Utility: arithmetic */
 
 static int32_t align_up(int32_t num, int32_t boundary) {
@@ -652,7 +658,7 @@ static int32_t and32(int32_t x, int32_t y) {
     return (int32_t)((uint32_t)x & (uint32_t)y);
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Module list handling */
 
 static Module *find_module(const char *name) {
@@ -690,7 +696,7 @@ static void add_init_point(int32_t entryPoint, Module *object) {
     nofEntryPoints++;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* SysFix initialization */
 
 static void init_sysfix(int idx, const char *name, const char *module, const char *command, bool autofix) {
@@ -727,6 +733,18 @@ static void initialise(bool autofix) {
     init_sysfix(ActivateSF, "activate", "", "", 0);
     init_sysfix(LockSF, "lock", "", "", 0);
     init_sysfix(UnlockSF, "unlock", "", "", 0);
+    init_sysfix(divmodSF, "divmod", "DivSupport", "DivMod32", autofix);
+
+    /* Future soft-float64 sysfixes (unused by ARM32 VFPv3 backend, for RV32IMAFC) */
+    init_sysfix(f64addSF, "f64add", "Float64", "Add", autofix);
+    init_sysfix(f64subSF, "f64sub", "Float64", "Sub", autofix);
+    init_sysfix(f64mulSF, "f64mul", "Float64", "Mul", autofix);
+    init_sysfix(f64divSF, "f64div", "Float64", "Div", autofix);
+    init_sysfix(f64cmpSF, "f64cmp", "Float64", "Cmp", autofix);
+    init_sysfix(f64cvtifSF, "f64cvtif", "Float64", "CvtIF", autofix);
+    init_sysfix(f64cvtfiSF, "f64cvtfi", "Float64", "CvtFI", autofix);
+    init_sysfix(f64negSF, "f64neg", "Float64", "Neg", autofix);
+    init_sysfix(f64absSF, "f64abs", "Float64", "Abs", autofix);
 
     init_sysfix(CurProcSF, "", "", "", 0);
     init_sysfix(objectSF, "", "", "", 0);
@@ -744,7 +762,7 @@ static void initialise(bool autofix) {
     moduleDescSize += mDescPadSize;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Fixup helpers (operate on in-memory code/data arrays) */
 
 static void put_dword(uint8_t *code, int32_t idx, int32_t value) {
@@ -760,10 +778,10 @@ static int32_t get_dword(const uint8_t *code, int32_t idx) {
             ((uint32_t)code[idx + 2] << 16) | ((uint32_t)code[idx + 3] << 24));
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Architecture-specific implementations */
 
-/* i386 */
+/* ---- i386 ---- */
 
 static void i386_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     int32_t instr, nextlink, jmp;
@@ -881,7 +899,7 @@ static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
     return true;
 }
 
-/* ARMv6/v7 */
+/* ---- ARMv6/v7 ---- */
 
 static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     /* ARM compiler stores the fixup chain in the low 24 bits of BL instructions.
@@ -1063,7 +1081,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
     uint32_t bits27_20 = (instr >> 20) & 0xFF;
 
     if (bits27_20 == 0x30) {
-        /* MOVW (move wide, 16-bit immediate)
+        /* ---- MOVW (move wide, 16-bit immediate) ----
          * Encoding: cond[31:28] 0011_0000 imm4[19:16] Rd[15:12] imm12[11:0]
          * The compiler emits MOVW+MOVT pairs for absolute data references.
          * MOVW is at 'off', MOVT is at 'off+4'.
@@ -1094,7 +1112,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
         put_dword(code, off + 4, (int32_t)new_movt);
 
     } else if (((instr >> 25) & 0x7) == 1) {
-        /* Data-processing immediate (I=1) 
+        /* ---- Data-processing immediate (I=1) ----
          * cond[31:28] 00 1 opcode[24:21] S[20] Rn[19:16] Rd[15:12] imm12[11:0]
          * Legacy path for old-style ADD/SUB Rd, PC, #imm data refs */
         uint32_t Rd   = (instr >> 12) & 0xF;
@@ -1133,7 +1151,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
         put_dword(code, off, (int32_t)new_instr);
 
     } else if (((instr >> 26) & 0x3) == 1 && ((instr >> 25) & 1) == 0) {
-        /* LDR/STR immediate offset (I=0) 
+        /* ---- LDR/STR immediate offset (I=0) ----
          * cond[31:28] 01 0 P[24] U[23] B[22] W[21] L[20]
          * Rn[19:16] Rd[15:12] offset12[11:0] */
         uint32_t offset12 = instr & 0xFFF;
@@ -1179,7 +1197,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
     }
 }
 
-/* RV32 (RISC-V 32-bit) */
+/* ---- RV32 (RISC-V 32-bit) ---- */
 
 /* Encode a RISC-V J-type immediate (for JAL).
  * The 21-bit signed offset is encoded as: imm[20|10:1|11|19:12] in bits [31:12]. */
@@ -1298,7 +1316,7 @@ static bool rv32_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
     return false; /* Multiboot is not supported on RISC-V */
 }
 
-/* ArchOps table instances */
+/* ---- ArchOps table instances ---- */
 
 static const ArchOps arch_i386 = {
     .name               = "i386",
@@ -1336,7 +1354,7 @@ static const ArchOps arch_rv32 = {
     .PatchMultibootHeader = rv32_PatchMultibootHeader,
 };
 
-/* */
+/* ------------------------------------------------------------ */
 /* Generic fixup wrappers (delegate to arch) */
 
 static void fixup_call(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
@@ -1390,10 +1408,14 @@ static void fix_ptr(Module *m) {
     for (int32_t i = 0; i < m->nofPtrs; i++) m->ptrTab[i] += e;
 }
 
-/* Map link table entry codes 253..246 to SysFix indices (newSF..UnlockSF).
- * Entry 253 -> newSF (0), 252 -> sysnewSF (1), ..., 246 -> UnlockSF (7). */
+/* Map link table entry codes to SysFix indices.
+ * Entry 253 -> newSF (0), 252 -> sysnewSF (1), ..., 246 -> UnlockSF (7),
+ * 245 -> divmodSF (8), 244 -> f64addSF (17), ..., 236 -> f64absSF (25). */
 static int32_t sysfix_from_entry(uint8_t entry) {
-    return 253 - (int32_t)entry;  /* 253->0, 252->1, ..., 246->7 */
+    if (entry >= 246) return 253 - (int32_t)entry;  /* 253->0 .. 246->7 */
+    if (entry == 245) return divmodSF;               /* 245->8 */
+    if (entry >= 236 && entry <= 244) return f64addSF + (244 - (int32_t)entry); /* 244->17 .. 236->25 */
+    return -1; /* unknown */
 }
 
 static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLinkEntry *dataLinks) {
@@ -1426,8 +1448,11 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                 break;
             }
             case 253: case 252: case 251: case 250:
-            case 249: case 248: case 247: case 246: {
-                /* SysFix call fixups: newSF through UnlockSF */
+            case 249: case 248: case 247: case 246:
+            case 245:
+            case 244: case 243: case 242: case 241:
+            case 240: case 239: case 238: case 237: case 236: {
+                /* SysFix call fixups: newSF through UnlockSF, divmodSF, f64*SF */
                 int32_t sfIdx = sysfix_from_entry(entry);
                 sysfix_warning(sfIdx);
                 fixup_call(codebase, m->codeBase, linkTab[i].link, SysFix[sfIdx].adr);
@@ -1448,7 +1473,7 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
     (void)dataLinks;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Ref table parsing (FindAdr) */
 
 static void get_num_from_refs(const uint8_t *refs, int32_t *i, int32_t *num) {
@@ -1516,7 +1541,7 @@ static int32_t find_adr(Module *mod, const char *pat, int32_t type) {
     return 0;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Export table utilities */
 
 static void assign_export_sizes(ExportDesc *exp, Module *m) {
@@ -1582,7 +1607,7 @@ static void init_types(Module *m) {
     for (int32_t i = 0; i < m->nofTds; i++) init_type(m, i);
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Object file block readers */
 
 static void expect_tag(FILE *f, uint8_t tag, const char *modName) {
@@ -1888,7 +1913,7 @@ static void read_ref(FILE *f, Module *m) {
     read_bytes(f, m->refs, (size_t)m->refSize-1);
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Use block checking (linking imported refs) */
 
 static void check_use_block(FILE *f, Module *M, DataLinkEntry *dataLinks);
@@ -1980,7 +2005,7 @@ static void read_use(FILE *f, Module *m, DataLinkEntry *dataLinks) {
     check_use_block(f, m, dataLinks);
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Dumping / image writing */
 
 static void dump_ptr_header(FILE *out, int32_t address, int32_t size, int32_t *adrPad, int32_t *sizePad) {
@@ -2195,7 +2220,7 @@ static void dump_modules(FILE *out) {
         int32_t tag = next + 4;
 
         log_ln();
-        log_puts("-MODULE "); log_puts(m->name); log_ln();
+        log_puts("--------- MODULE "); log_puts(m->name); log_ln();
         dump_addr(next, "Base");
 
         assert(((next + 4) % Boundary) == 0);
@@ -2456,7 +2481,7 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
     log_puts("expDesc is "); log_puts(SysFix[expDescSF].module); log_puts("."); log_puts(SysFix[expDescSF].command); log_hex(SysFix[expDescSF].adr); log_ln();
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* LoadModule / Load */
 
 static void load_module_body(FILE *f, Module *m, int32_t *base) {
@@ -2535,7 +2560,7 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     m->imageSize += moduleDescSize;
 
     if (res == done) {
-        for (int32_t i = newSF; i <= copyarraySF; i++) {
+        for (int32_t i = newSF; i <= f64absSF; i++) {
             if (strcmp(SysFix[i].module, m->name) == 0 && SysFix[i].command[0]) {
                 SysFix[i].adr = m->codeBase + find_adr(m, SysFix[i].command, Proc);
             }
@@ -2660,7 +2685,7 @@ static void load_module(Module **m_out, const char *name, int32_t *base) {
     *m_out = m;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* CLI */
 
 typedef struct {
@@ -2834,7 +2859,7 @@ static Options parse_args(int argc, char **argv) {
     return opt;
 }
 
-/* */
+/* ------------------------------------------------------------ */
 /* Main */
 
 int main(int argc, char **argv) {
