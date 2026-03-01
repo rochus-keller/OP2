@@ -641,9 +641,11 @@ static long tell_abs(FILE *f) {
 /* Utility: arithmetic */
 
 static int32_t align_up(int32_t num, int32_t boundary) {
-    int32_t mod = (-num) % boundary;
-    if (mod < 0) mod += boundary;
-    return num + mod;
+    uint32_t u = (uint32_t)num;
+    uint32_t b = (uint32_t)boundary;
+    uint32_t mod = u % b;
+    if (mod != 0) u += b - mod;
+    return (int32_t)u;
 }
 
 static int32_t lsw(int32_t x) {
@@ -1209,11 +1211,44 @@ static uint32_t rv32_encode_j_imm(int32_t offset) {
            (u & 0x0FF000);           /* imm[19:12] -> bits 19:12 */
 }
 
+static int32_t rv32_decode_j_imm(uint32_t instr) {
+    /* Decode J-type immediate from JAL instruction.
+     * Encoding: instr[31]=imm[20], instr[30:21]=imm[10:1],
+     *           instr[20]=imm[11], instr[19:12]=imm[19:12] */
+    uint32_t b20   = (instr >> 31) & 1;          /* imm[20] */
+    uint32_t b10_1 = (instr >> 21) & 0x3FF;      /* imm[10:1] */
+    uint32_t b11   = (instr >> 20) & 1;           /* imm[11] */
+    uint32_t b19_12= (instr >> 12) & 0xFF;        /* imm[19:12] */
+    uint32_t imm = (b20 << 20) | (b19_12 << 12) | (b11 << 11) | (b10_1 << 1);
+    /* Sign-extend from bit 20 */
+    if (b20) imm |= 0xFFE00000u;
+    return (int32_t)imm;
+}
+
 static void rv32_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
-    while (link != 0xFFFF) {
-        int32_t instr = get_dword(code, link);
-        int32_t nextlink = msw(instr);
-        /* JAL ra, offset: opcode 0x6F, rd=1 (ra) */
+    /* The compiler's AddLink stores the fixup chain as a raw 20-bit value in
+     * bits [31:12] of the JAL instruction (NOT J-type encoded).
+     * Chain values:
+     *   0xFFFFF = sentinel (end of chain)
+     *   < 0x80000 = small offset: byte_offset = chainVal * 4
+     *   >= 0x80000 = large offset: sign-extend 20-bit, byte_offset = signed * 4 + 0x10000 */
+    while (link >= 0) {
+        uint32_t instr = (uint32_t)get_dword(code, link);
+        /* Extract raw 20-bit chain value from bits [31:12] */
+        uint32_t chainVal = (instr >> 12) & 0xFFFFF;
+        int32_t nextlink;
+        if (chainVal == 0xFFFFF) {
+            /* Sentinel: end of chain */
+            nextlink = -1;
+        } else if (chainVal >= 0x80000) {
+            /* Large offset: sign-extend 20-bit and decode */
+            int32_t signed20 = (int32_t)(chainVal | 0xFFF00000u);
+            nextlink = signed20 * 4 + 0x10000;
+        } else {
+            /* Small offset: chainVal * 4 = byte offset */
+            nextlink = (int32_t)(chainVal * 4);
+        }
+        /* JAL ra, offset: encode actual branch using J-type encoding */
         int32_t offset = target - (codeImgBase + link);
         uint32_t jal = 0x000000EFu | rv32_encode_j_imm(offset);
         put_dword(code, link, (int32_t)jal);
@@ -1549,7 +1584,7 @@ static void assign_export_sizes(ExportDesc *exp, Module *m) {
     int32_t size = exp->nofExp;
     if ((size == 0) || exp->dsc[0].done) return;
     exp->dsc[0].Adr = m->expAdr + m->expSize + 4;
-    assert((exp->dsc[0].Adr % 32) == 0);
+    assert(((uint32_t)exp->dsc[0].Adr % 32) == 0);
     m->expSize += 32 * ((size * 16 + TagSize + ArrayDescSize + 31) / 32);
     for (int32_t i = 0; i < size; i++) assign_export_sizes(&exp->dsc[i], m);
 }
@@ -1877,11 +1912,11 @@ static void read_type(FILE *f, Module *m) {
         }
 
         /* td size calculations (as in BootLinker.Mod) */
-        assert(((m->typeTableAdr + m->typeTableSize + 4) % Boundary) == 0);
+        assert(((uint32_t)(m->typeTableAdr + m->typeTableSize + 4) % Boundary) == 0);
         td->tdSize = 13 + td->nofMethods + ExtTabWordSize + 1;
         td->tdSize += (-td->tdSize + 2) % 4;
         td->tdAdr = td->tdSize * 4 + m->typeTableAdr + m->typeTableSize + 4;
-        assert((td->tdAdr % 16) == 8);
+        assert(((uint32_t)td->tdAdr % 16) == 8);
         td->tdSize = (td->tdSize + 1 + td->nofPtrs + 1) * 4;
 
         /* write td address in constants section */
@@ -2027,7 +2062,7 @@ static void dump_ptr_header(FILE *out, int32_t address, int32_t size, int32_t *a
 
 static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32_t image_base, bool multiboot) {
     log_puts("Init block at "); log_hex(*entry); log_ln();
-    assert(((*entry + 4) % Boundary) == 0);
+    assert(((uint32_t)(*entry + 4) % Boundary) == 0);
 
     /* Compute preamble size: the arch tells us how many bytes it will emit.
      * i386:  MOV ESP,imm32 (5) + optional PUSH EBX (1) = 5 or 6
@@ -2102,7 +2137,7 @@ static int32_t get_method_address(int32_t n, TypeDesc *t) {
 
 static void dump_types(FILE *out, Module *m, int32_t *next) {
     for (int32_t i = 0; i < m->nofTds; i++) {
-        assert((*next % Boundary) == 28);
+        assert(((uint32_t)*next % Boundary) == 28);
         TypeDesc *t = m->tdescs[i];
         int32_t tag = *next + 4;
 
@@ -2121,7 +2156,7 @@ static void dump_types(FILE *out, Module *m, int32_t *next) {
         int32_t j = (-(*next) - 12) % 16;
         if (j < 0) j += 16;
         *next += j;
-        assert((*next % 16) == 4);
+        assert(((uint32_t)*next % 16) == 4);
         for (int32_t k = 0; k < j / 4; k++) write_i32_le(out, 0);
 
         /* methods */
@@ -2140,7 +2175,7 @@ static void dump_types(FILE *out, Module *m, int32_t *next) {
             else break;
         }
 
-        assert((*next % 16) == 4);
+        assert(((uint32_t)*next % 16) == 4);
         write_i32_le(out, tag);
         *next += 4;
 
@@ -2155,7 +2190,7 @@ static void dump_types(FILE *out, Module *m, int32_t *next) {
 }
 
 static void dump_export(FILE *out, ExportDesc *exp, int32_t *next, int32_t tag) {
-    assert((*next % 32) == 0);
+    assert(((uint32_t)*next % 32) == 0);
     int32_t num = exp->nofExp;
     exp->done = false;
     if ((num == 0) || !exp->dsc[0].done) return;
@@ -2223,7 +2258,7 @@ static void dump_modules(FILE *out) {
         log_puts("--------- MODULE "); log_puts(m->name); log_ln();
         dump_addr(next, "Base");
 
-        assert(((next + 4) % Boundary) == 0);
+        assert(((uint32_t)(next + 4) % Boundary) == 0);
         assert(tell_abs(out) + imageBase == m->base);
 
         int32_t size = m->imageSize - moduleDescSize - m->typeTableSize - m->expSize - 28;
@@ -2234,7 +2269,7 @@ static void dump_modules(FILE *out) {
         assert(adrPad == 0);
 
         /* Entries */
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.entries = next;
         int32_t num = m->nofEntries;
         ArrayDesc arrHdr = {0, 0, 0, num};
@@ -2250,7 +2285,7 @@ static void dump_modules(FILE *out) {
 
         /* Cmds */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.cmds = next;
         num = m->nofCmds;
         arrHdr.len = num;
@@ -2271,7 +2306,7 @@ static void dump_modules(FILE *out) {
 
         /* Ptrs */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.ptrTab = next;
         num = m->nofPtrs;
         arrHdr.len = num;
@@ -2286,7 +2321,7 @@ static void dump_modules(FILE *out) {
 
         /* Imports */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.imports = next;
         num = m->nofImps;
         arrHdr.len = num;
@@ -2301,7 +2336,7 @@ static void dump_modules(FILE *out) {
 
         /* Data + Const */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.data = next;
         arrHdr.len = m->dataSize + m->conSize;
         write_i32_le(out, arrHdr.a);
@@ -2313,7 +2348,7 @@ static void dump_modules(FILE *out) {
 
         /* Code */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.code = next;
         num = m->codeSize;
         arrHdr.len = num;
@@ -2326,7 +2361,7 @@ static void dump_modules(FILE *out) {
 
         /* TDescs (array of tdAdr) */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.tdescs = next;
         num = m->nofTds;
         arrHdr.len = num;
@@ -2339,7 +2374,7 @@ static void dump_modules(FILE *out) {
 
         /* Refs */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.refs = next;
         num = m->refSize;
         arrHdr.len = num;
@@ -2352,7 +2387,7 @@ static void dump_modules(FILE *out) {
 
         /* import array (DefMaxImport) */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.import = next;
         img.nofimp = m->nofimp;
         num = DefMaxImport;
@@ -2366,7 +2401,7 @@ static void dump_modules(FILE *out) {
 
         /* struct array (DefMaxStruct) */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.strct = next;
         img.nofstrc = m->nofstrc;
         num = DefMaxStruct;
@@ -2380,7 +2415,7 @@ static void dump_modules(FILE *out) {
 
         /* reimp array (DefMaxReimp) */
         write_i32_le(out, tag);
-        assert((next % 16) == 8);
+        assert(((uint32_t)next % 16) == 8);
         img.reimp = next;
         img.nofreimp = m->nofreimp;
         num = DefMaxReimp;
@@ -2395,7 +2430,7 @@ static void dump_modules(FILE *out) {
         /* export padding + export dump */
         write_bytes(out, padding, (size_t)(m->expPadding + 4));
         next += m->expPadding + 4;
-        assert((next % 32) == 0);
+        assert(((uint32_t)next % 32) == 0);
         sysfix_warning(expDescSF);
         dump_export(out, &m->exportTree, &next, SysFix[expDescSF].adr | 2);
         img.exportDesc.fp = m->exportTree.fp;
@@ -2408,7 +2443,7 @@ static void dump_modules(FILE *out) {
         dump_types(out, m, &next);
 
         /* module descriptor */
-        assert((next % Boundary) == 28);
+        assert(((uint32_t)next % Boundary) == 28);
         assert(next == m->modDescAdr - 4);
         sysfix_warning(modDescSF);
         write_i32_le(out, SysFix[modDescSF].adr);
@@ -2533,7 +2568,7 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     m->imageSize += DefMaxReimp * 4 + TagSize + ArrayDescSize;
 
     m->expAdr = align_up(m->base + m->imageSize + 4, Boundary) - 4;
-    assert((m->expAdr % 32) == 28);
+    assert(((uint32_t)m->expAdr % 32) == 28);
     m->expPadding = m->expAdr - m->base - m->imageSize;
     m->expSize = 0;
     m->imageSize += m->expPadding;
@@ -2547,14 +2582,14 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     /* prepare for types */
     m->typeTableAdr = m->base + m->imageSize;
     m->typeTableSize = 0;
-    assert(((m->imageSize + m->base + 4) % Boundary) == 0);
+    assert(((uint32_t)(m->imageSize + m->base + 4) % Boundary) == 0);
 
     read_type(f, m);
     m->imageSize += m->typeTableSize;
-    assert(((m->imageSize + m->base + 4) % Boundary) == 0);
+    assert(((uint32_t)(m->imageSize + m->base + 4) % Boundary) == 0);
 
     read_ref(f, m);
-    assert(((m->imageSize + m->base + 4) % Boundary) == 0);
+    assert(((uint32_t)(m->imageSize + m->base + 4) % Boundary) == 0);
 
     m->modDescAdr = m->imageSize + m->base + 4;
     m->imageSize += moduleDescSize;
@@ -2699,6 +2734,7 @@ typedef struct {
     const char *sysfix_overrides[MaxSF];
     int multiboot;
     int enable_stack;
+    bool base_given;
 } Options;
 
 static int sysfix_index_by_name(const char *name) {
@@ -2748,10 +2784,10 @@ static bool parse_hex_i32(const char *s, int32_t *out) {
     if (!s || !*s) return false;
     errno = 0;
     char *end = NULL;
-    long v = strtol(s, &end, 16);
-    if (errno != 0 || !end || *end != 0)
+    unsigned long v = strtoul(s, &end, 16);
+    if (errno != 0 || !end || *end != 0 || v > 0xFFFFFFFFUL)
         return false;
-    *out = (int32_t)v;
+    *out = (int32_t)(uint32_t)v;
     return true;
 }
 
@@ -2759,6 +2795,7 @@ static Options parse_args(int argc, char **argv) {
     Options opt;
     memset(&opt, 0, sizeof(opt));
     opt.base = -1;
+    opt.base_given = false;
 
     /* allocate module array */
     const char **mods = (const char **)calloc((size_t)argc, sizeof(const char *));
@@ -2785,6 +2822,7 @@ static Options parse_args(int argc, char **argv) {
         } else if (strcmp(a, "--base") == 0 && i + 1 < argc) {
             if (!parse_hex_i32(argv[++i], &opt.base))
                 halt_msg("invalid --base");
+            opt.base_given = true;
         } else if (strcmp(a, "--log") == 0 && i + 1 < argc) {
             opt.log = argv[++i];
         } else if (strcmp(a, "--path") == 0 && i + 1 < argc) {
@@ -2838,7 +2876,7 @@ static Options parse_args(int argc, char **argv) {
         }
     }
 
-    if( opt.base < 0 ) {
+    if( !opt.base_given ) {
         if( opt.multiboot ) {
             /* ARM32/RV32 QEMU -kernel loads at 0x10000; i386 multiboot at 0x100000 */
             if( arch == &arch_arm32 || arch == &arch_rv32 )
@@ -2882,7 +2920,7 @@ int main(int argc, char **argv) {
     initialise(autofix);
 
     Options opt = parse_args(argc, argv);
-    if (!opt.output || opt.base < 0 || opt.module_count == 0) {
+    if (!opt.output || (!opt.base_given && !opt.multiboot) || opt.module_count == 0) {
         usage(stderr);
         return 2;
     }
@@ -2891,7 +2929,7 @@ int main(int argc, char **argv) {
         snprintf(extension, sizeof(extension), "%s", opt.obj_suffix);
     }
 
-    if ((opt.base % PageSize) != 0) {
+    if (((uint32_t)opt.base % PageSize) != 0) {
         halt_msg("Image base must be a multiple of machine memory page size");
     }
 
