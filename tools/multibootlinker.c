@@ -956,6 +956,24 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
      * ARM encoding for MOVT Rd, #imm16: 0xE34D0000 | (imm4 << 16) | (Rd << 12) | imm12 */
     int32_t emitted = 0;
 
+    /* Enable VFP/NEON coprocessor (CP10 + CP11) before any VFP instructions.
+     * Required on ARMv7 — without this, VFP instructions cause undefined instruction exceptions.
+     *
+     * MRC p15, 0, r0, c1, c0, 2    @ Read CPACR           = 0xEE100F50 (actually EE110F50)
+     * ORR r0, r0, #0x00F00000      @ Enable CP10+CP11     = 0xE3800A0F
+     * MCR p15, 0, r0, c1, c0, 2    @ Write CPACR          = 0xEE010F50
+     * ISB                           @ Instruction barrier   = 0xF57FF06F
+     * MOV r0, #0x40000000           @ FPEXC.EN bit         = 0xE3A00101 (via rotate)
+     * VMSR FPEXC, r0               @ Enable VFP           = 0xEEE80A10
+     */
+    write_i32_le(out, (int32_t)0xEE110F50u);  /* MRC p15, 0, r0, c1, c0, 2 */
+    write_i32_le(out, (int32_t)0xE3800A0Fu);  /* ORR r0, r0, #0x00F00000 */
+    write_i32_le(out, (int32_t)0xEE010F50u);  /* MCR p15, 0, r0, c1, c0, 2 */
+    write_i32_le(out, (int32_t)0xF57FF06Fu);  /* ISB */
+    write_i32_le(out, (int32_t)0xE3A00101u);  /* MOV r0, #0x40000000 (1 rotated right by 2) */
+    write_i32_le(out, (int32_t)0xEEE80A10u);  /* VMSR FPEXC, r0 */
+    emitted += 24;
+
     uint32_t lo16 = (uint32_t)initial_sp & 0xFFFF;
     uint32_t hi16 = ((uint32_t)initial_sp >> 16) & 0xFFFF;
 
