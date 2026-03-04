@@ -112,6 +112,8 @@ enum {
 
 #define EUProcFlag 0x80000000u
 
+#define STACK_SIZE 8192
+
 static bool Trace = true;
 static bool TraceMore = false;
 
@@ -497,6 +499,7 @@ static void sysfix_warning(int i) {
         fprintf(stderr, "warning: system fixup '%s' not resolved\n", SysFix[i].name);
     }
 }
+
 
 /* ------------------------------------------------------------ */
 /* Utility: string handling */
@@ -960,14 +963,14 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
      * Required on ARMv7 — without this, VFP instructions cause undefined instruction exceptions.
      *
      * MRC p15, 0, r0, c1, c0, 2    @ Read CPACR           = 0xEE100F50 (actually EE110F50)
-     * ORR r0, r0, #0x00F00000      @ Enable CP10+CP11     = 0xE3800A0F
+     * ORR r0, r0, #0x00F00000      @ Enable CP10+CP11     = 0xE380060F
      * MCR p15, 0, r0, c1, c0, 2    @ Write CPACR          = 0xEE010F50
      * ISB                           @ Instruction barrier   = 0xF57FF06F
      * MOV r0, #0x40000000           @ FPEXC.EN bit         = 0xE3A00101 (via rotate)
      * VMSR FPEXC, r0               @ Enable VFP           = 0xEEE80A10
      */
     write_i32_le(out, (int32_t)0xEE110F50u);  /* MRC p15, 0, r0, c1, c0, 2 */
-    write_i32_le(out, (int32_t)0xE3800A0Fu);  /* ORR r0, r0, #0x00F00000 */
+    write_i32_le(out, (int32_t)0xE380060Fu);  /* ORR r0, r0, #0x00F00000 */
     write_i32_le(out, (int32_t)0xEE010F50u);  /* MCR p15, 0, r0, c1, c0, 2 */
     write_i32_le(out, (int32_t)0xF57FF06Fu);  /* ISB */
     write_i32_le(out, (int32_t)0xE3A00101u);  /* MOV r0, #0x40000000 (1 rotated right by 2) */
@@ -1565,7 +1568,8 @@ static int32_t find_adr(Module *mod, const char *pat, int32_t type) {
             j++;
         } while (ch != 0);
 
-        if (found && (type == Proc)) return ofs;
+        if (found && (type == Proc))
+            return ofs;
 
         if (i < m) {
             ch = mod->refs[i++];
@@ -1584,12 +1588,15 @@ static int32_t find_adr(Module *mod, const char *pat, int32_t type) {
                     found = found && (ch == (uint8_t)pat[j]);
                     j++;
                 } while (ch != 0);
-                if (found && (type == Var)) return vofs;
-                if (i < m) ch = mod->refs[i++];
+                if (found && (type == Var))
+                    return vofs;
+                if (i < m)
+                    ch = mod->refs[i++];
             }
         }
     }
 
+    fprintf(stderr, "ERROR: system fixup '%s.%s' not resolved\n", mod->name, pat);
     halt_msg("FindAdr: name not found");
     return 0;
 }
@@ -2511,7 +2518,7 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
     dump_modules(out);
 
     int32_t ep = entryPoint;
-    int32_t stack_size = enable_stack ? 8192 : 0;
+    int32_t stack_size = enable_stack ? STACK_SIZE : 0;
     dump_init_calls(out, &ep, stack_size, base, multiboot);
 
     int32_t size = (int32_t)tell_abs(out);
@@ -2522,20 +2529,85 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
         /* Standard Native Oberon header (always for non-i386, or when --multiboot not set) */
         patch_header(out, base, ep, size);
     }
-    
+        
     fclose(out);
 
     /* Log sysfix summary */
-    log_puts("new is "); log_puts(SysFix[newSF].module); log_puts("."); log_puts(SysFix[newSF].command); log_hex(SysFix[newSF].adr); log_ln();
-    log_puts("sysnew is "); log_puts(SysFix[sysnewSF].module); log_puts("."); log_puts(SysFix[sysnewSF].command); log_hex(SysFix[sysnewSF].adr); log_ln();
-    log_puts("newarr is "); log_puts(SysFix[newarrSF].module); log_puts("."); log_puts(SysFix[newarrSF].command); log_hex(SysFix[newarrSF].adr); log_ln();
-    log_puts("list is "); log_puts(SysFix[listSF].module); log_puts("."); log_puts(SysFix[listSF].command); log_hex(SysFix[listSF].adr); log_ln();
-    log_puts("modDesc is "); log_puts(SysFix[modDescSF].module); log_puts("."); log_puts(SysFix[modDescSF].command); log_hex(SysFix[modDescSF].adr); log_ln();
-    log_puts("expDesc is "); log_puts(SysFix[expDescSF].module); log_puts("."); log_puts(SysFix[expDescSF].command); log_hex(SysFix[expDescSF].adr); log_ln();
+    log_puts("new is "); log_puts(SysFix[newSF].module); log_puts("."); log_puts(SysFix[newSF].command); log_puts(" "); log_hex(SysFix[newSF].adr); log_ln();
+    log_puts("sysnew is "); log_puts(SysFix[sysnewSF].module); log_puts("."); log_puts(SysFix[sysnewSF].command); log_puts(" "); log_hex(SysFix[sysnewSF].adr); log_ln();
+    log_puts("newarr is "); log_puts(SysFix[newarrSF].module); log_puts("."); log_puts(SysFix[newarrSF].command); log_puts(" "); log_hex(SysFix[newarrSF].adr); log_ln();
+    log_puts("list is "); log_puts(SysFix[listSF].module); log_puts("."); log_puts(SysFix[listSF].command); log_puts(" "); log_hex(SysFix[listSF].adr); log_ln();
+    log_puts("modDesc is "); log_puts(SysFix[modDescSF].module); log_puts("."); log_puts(SysFix[modDescSF].command); log_puts(" "); log_hex(SysFix[modDescSF].adr); log_ln();
+    log_puts("expDesc is "); log_puts(SysFix[expDescSF].module); log_puts("."); log_puts(SysFix[expDescSF].command); log_puts(" "); log_hex(SysFix[expDescSF].adr); log_ln();
 }
 
 /* ------------------------------------------------------------ */
 /* LoadModule / Load */
+
+static void dump_module_symbols(Module *mod) {
+    printf("=== Symbols for module: %s ===\n", mod->name);
+
+    if (mod->refSize == 0 || !mod->refs) {
+        printf("  (No refs section found! The module was likely compiled without symbol info.)\n");
+        printf("=================================\n\n");
+        return;
+    }
+
+    int32_t i = 0;
+    int32_t m = mod->refSize;
+    uint8_t ch = mod->refs[i++];
+
+    /* F8 and F9 indicate the start of a procedure or the module's main scope */
+    while ((i < m) && ((ch == 0xF8) || (ch == 0xF9))) {
+        int32_t ofs = 0;
+        get_num_from_refs(mod->refs, &i, &ofs);
+        if (ch == 0xF9) {
+            int32_t t = 0;
+            get_num_from_refs(mod->refs, &i, &t);
+            i += 3; /* RetType, procLev, slFlag */
+        }
+
+        /* Read Procedure Name */
+        char name[256];
+        int32_t j = 0;
+        do {
+            ch = mod->refs[i++];
+            if (j < 255) name[j++] = (char)ch;
+        } while (ch != 0);
+        name[j] = '\0';
+
+        printf("[Proc] %s (offset: %d)\n", name[0] == '\0' ? "<ModuleBody>" : name, ofs);
+
+        /* Read Variables in this scope */
+        if (i < m) {
+            ch = mod->refs[i++];
+            /* 1=VAR, 2=VAR Param, 3=Value Param */
+            while ((i < m) && (ch >= 0x01) && (ch <= 0x03)) {
+                int mode = ch;
+                ch = mod->refs[i++];
+                if ((ch >= 0x81) || (ch == 0x16) || (ch == 0x1D)) {
+                    int32_t t = 0;
+                    get_num_from_refs(mod->refs, &i, &t);
+                }
+                int32_t vofs = 0;
+                get_num_from_refs(mod->refs, &i, &vofs);
+
+                j = 0;
+                do {
+                    ch = mod->refs[i++];
+                    if (j < 255) name[j++] = (char)ch;
+                } while (ch != 0);
+                name[j] = '\0';
+
+                printf("    [Var ] %s (mode: %d, offset: %d)\n", name, mode, vofs);
+
+                if (i < m)
+                    ch = mod->refs[i++];
+            }
+        }
+    }
+    printf("=================================\n\n");
+}
 
 static void load_module_body(FILE *f, Module *m, int32_t *base) {
     int32_t symSize = read_num(f);
@@ -2609,11 +2681,20 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     read_ref(f, m);
     assert(((uint32_t)(m->imageSize + m->base + 4) % Boundary) == 0);
 
+#if 0
+    dump_module_symbols(m);
+#endif
+
     m->modDescAdr = m->imageSize + m->base + 4;
     m->imageSize += moduleDescSize;
 
     if (res == done) {
-        for (int32_t i = newSF; i <= f64absSF; i++) {
+        for (int32_t i = newSF; i <= copyarraySF; i++) {
+            if (strcmp(SysFix[i].module, m->name) == 0 && SysFix[i].command[0]) {
+                SysFix[i].adr = m->codeBase + find_adr(m, SysFix[i].command, Proc);
+            }
+        }
+        for (int32_t i = f64addSF; i < MaxSF; i++) {
             if (strcmp(SysFix[i].module, m->name) == 0 && SysFix[i].command[0]) {
                 SysFix[i].adr = m->codeBase + find_adr(m, SysFix[i].command, Proc);
             }
@@ -2843,6 +2924,8 @@ static Options parse_args(int argc, char **argv) {
             opt.base_given = true;
         } else if (strcmp(a, "--log") == 0 && i + 1 < argc) {
             opt.log = argv[++i];
+        } else if (strcmp(a, "--autofix") == 0 && i + 1 < argc) {
+            // NOP, just here to be eaten without error
         } else if (strcmp(a, "--path") == 0 && i + 1 < argc) {
             modulePath = argv[++i];
         } else if (strcmp(a, "--obj-suffix") == 0 && i + 1 < argc) {
@@ -3004,7 +3087,7 @@ int main(int argc, char **argv) {
 
     int32_t stack_size = 0;
     if (opt.enable_stack) {
-        stack_size = 8192; // 8 KB stack, TODO: consider this as an additional option
+        stack_size = STACK_SIZE; // 8 KB stack, TODO: consider this as an additional option
         imageSize += stack_size;
     }
 
