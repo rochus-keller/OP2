@@ -112,7 +112,9 @@ enum {
 
 #define EUProcFlag 0x80000000u
 
-#define STACK_SIZE 8192
+#define DEFAULT_STACK_SIZE 8192
+
+static int32_t stackSize = DEFAULT_STACK_SIZE;
 
 static bool Trace = true;
 static bool TraceMore = false;
@@ -907,14 +909,22 @@ static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
 /* ---- ARMv6/v7 ---- */
 
 static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
-    /* ARM compiler stores the fixup chain in the low 24 bits of BL instructions.
+    /* ARM compiler stores the fixup chain in the low 24 bits of BL instructions
+     * (and also MOVW instructions for procedure variable assignments).
      * Sentinel is 0xFFFFFF (24-bit all-ones), NOT the i386 sentinel 0xFFFF.
      * For small offsets (<0x8000): chain value = byte offset directly.
      * For large offsets (>=0x8000): chain value = ((offset - 0x10000) * 4) MOD 0x1000000,
-     *   which means values >= 0x800000 encode negative 16-bit offsets. */
-    while (link >= 0) {
+     *   which means values >= 0x800000 encode negative 16-bit offsets.
+     *
+     * The instruction type is distinguished by bits [27:24]:
+     *   0xB (BL)  -> patch as BL with relative offset
+     *   0x3 (MOVW) -> patch MOVW+MOVT pair with absolute address
+     *     (procedure variable assignment: vol.Proc := ImportedMod.Proc)
+     */
+    int safety = 100000;
+    while (link >= 0 && --safety > 0) {
         int32_t instr = get_dword(code, link);
-        /* Extract chain link from low 24 bits of BL instruction */
+        /* Extract chain link from low 24 bits */
         int32_t imm24 = instr & 0x00FFFFFF;
         int32_t nextlink;
         if (imm24 == 0xFFFFFF) {
@@ -929,10 +939,29 @@ static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t li
             /* Small offset: chain value is the byte offset directly */
             nextlink = imm24;
         }
-        /* ARM BL: offset = (target - (PC + 8)) >> 2, encoded in low 24 bits */
-        int32_t offset = (target - (codeImgBase + link + 8)) >> 2;
-        int32_t bl = (int32_t)0xEB000000u | (offset & 0x00FFFFFF);
-        put_dword(code, link, bl);
+
+        uint32_t optype = ((uint32_t)instr >> 24) & 0xFF;
+        if (optype == 0xE3) {
+            /* MOVW instruction: procedure variable assignment.
+             * Read MOVT at link+4 for Rd, then patch both with absolute address. */
+            uint32_t movt = (uint32_t)get_dword(code, link + 4);
+            uint32_t Rd = (movt >> 12) & 0xF;
+            uint32_t addr = (uint32_t)target;
+            uint32_t lo16 = addr & 0xFFFF;
+            uint32_t hi16 = (addr >> 16) & 0xFFFF;
+            uint32_t new_movw = 0xE3000000u | (Rd << 12) |
+                                ((lo16 & 0xF000) << 4) | (lo16 & 0xFFF);
+            uint32_t new_movt = 0xE3400000u | (Rd << 12) |
+                                ((hi16 & 0xF000) << 4) | (hi16 & 0xFFF);
+            put_dword(code, link, (int32_t)new_movw);
+            put_dword(code, link + 4, (int32_t)new_movt);
+        } else {
+            /* BL instruction: patch with relative branch offset */
+            int32_t offset = (target - (codeImgBase + link + 8)) >> 2;
+            int32_t bl = (int32_t)0xEB000000u | (offset & 0x00FFFFFF);
+            put_dword(code, link, bl);
+        }
+
         link = nextlink;
     }
 }
@@ -1494,12 +1523,72 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                 break;
             }
             case 254: {
-                /* local procedure assignment */
-                uint16_t offs = linkTab[i].link;
-                while (offs != 0xFFFF) {
-                    int32_t val = get_dword(codebase, offs);
-                    put_dword(codebase, offs, (int32_t)m->entries[lsw(val)]);
-                    offs = (uint16_t)msw(val);
+                /* local procedure variable assignment.
+                 *
+                 * i386: code[offs] is a raw 32-bit value where
+                 *   lsw = entry index, msw = next chain link (0xFFFF = end).
+                 *
+                 * ARM32: the compiler emits MOVW+MOVT pairs.  AddLink overwrites
+                 *   the MOVW's low 24 bits with the chain link (same format as BL
+                 *   chains: 0xFFFFFF = sentinel, otherwise byte offset).
+                 *   The entry index is stored in the MOVT's imm16 at offs+4.
+                 *   The MOVT also carries Rd in bits[15:12].
+                 */
+                if (arch == &arch_arm32) {
+                    /* ARM chain walk: low 24 bits of MOVW encode the chain */
+                    int32_t link = (int32_t)linkTab[i].link;
+                    while (link >= 0) {
+                        uint32_t movw = (uint32_t)get_dword(codebase, link);
+                        uint32_t movt = (uint32_t)get_dword(codebase, link + 4);
+
+                        /* Extract chain link from low 24 bits of MOVW
+                         * (same encoding as arm_PatchFunctionCall) */
+                        uint32_t imm24 = movw & 0x00FFFFFF;
+                        int32_t nextlink;
+                        if (imm24 == 0xFFFFFF) {
+                            nextlink = -1;  /* sentinel: end of chain */
+                        } else if (imm24 >= 0x800000) {
+                            int32_t signed24 = (int32_t)imm24 - 0x1000000;
+                            nextlink = signed24 / 4 + 0x10000;
+                        } else {
+                            nextlink = (int32_t)imm24;
+                        }
+
+                        /* Read entry index from MOVT imm16:
+                         * MOVT encoding: cond 0011_0100 imm4[19:16] Rd[15:12] imm12[11:0]
+                         * imm16 = (imm4 << 12) | imm12 */
+                        uint32_t Rd = (movt >> 12) & 0xF;
+                        uint32_t entry_idx = ((movt >> 4) & 0xF000) | (movt & 0xFFF);
+
+                        if ((int32_t)entry_idx >= m->nofEntries) {
+                            char buf[128];
+                            snprintf(buf, sizeof(buf),
+                                "ARM entry254: entry index %u out of range [0..%d) in %s at offset %d",
+                                entry_idx, m->nofEntries, m->name, link);
+                            halt_msg(buf);
+                        }
+
+                        /* Patch MOVW+MOVT with absolute procedure address */
+                        uint32_t addr = (uint32_t)m->entries[entry_idx];
+                        uint32_t lo16 = addr & 0xFFFF;
+                        uint32_t hi16 = (addr >> 16) & 0xFFFF;
+                        uint32_t new_movw = 0xE3000000u | (Rd << 12) |
+                                            ((lo16 & 0xF000) << 4) | (lo16 & 0xFFF);
+                        uint32_t new_movt = 0xE3400000u | (Rd << 12) |
+                                            ((hi16 & 0xF000) << 4) | (hi16 & 0xFFF);
+                        put_dword(codebase, link, (int32_t)new_movw);
+                        put_dword(codebase, link + 4, (int32_t)new_movt);
+
+                        link = nextlink;
+                    }
+                } else {
+                    /* i386 / generic: lsw/msw chain */
+                    uint16_t offs = linkTab[i].link;
+                    while (offs != 0xFFFF) {
+                        int32_t val = get_dword(codebase, offs);
+                        put_dword(codebase, offs, (int32_t)m->entries[lsw(val)]);
+                        offs = (uint16_t)msw(val);
+                    }
                 }
                 break;
             }
@@ -2091,14 +2180,14 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
 
     /* Compute preamble size: the arch tells us how many bytes it will emit.
      * i386:  MOV ESP,imm32 (5) + optional PUSH EBX (1) = 5 or 6
-     * ARM32: MOVW+MOVT SP (8) + optional PUSH {R2} (4) = 8 or 12
+     * ARM32: VFP init (24) + MOVW+MOVT SP (8) + optional PUSH {R2} (4) = 32 or 36
      * RV32:  LUI+ADDI SP (8) + optional ADDI+SW (8) = 8 or 16 */
     int32_t preamble_size = 0;
     if (stack_size > 0) {
         if (arch == &arch_i386)
             preamble_size = multiboot ? 6 : 5;
         else if (arch == &arch_arm32)
-            preamble_size = multiboot ? 12 : 8;
+            preamble_size = multiboot ? 36 : 32;
         else
             preamble_size = multiboot ? 16 : 8;
     }
@@ -2518,7 +2607,7 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
     dump_modules(out);
 
     int32_t ep = entryPoint;
-    int32_t stack_size = enable_stack ? STACK_SIZE : 0;
+    int32_t stack_size = enable_stack ? stackSize : 0;
     dump_init_calls(out, &ep, stack_size, base, multiboot);
 
     int32_t size = (int32_t)tell_abs(out);
@@ -2872,6 +2961,7 @@ static void usage(FILE *out) {
             "  --multiboot                  Enable boot info passing (pushes boot-info register;\n"
             "                                 Multiboot header on i386, device tree on arm32/rv32)\n"
             "  --enable-stack               Reserve and initialize the stack\n"
+            "  --stack-size <bytes>         Stack size in bytes (default: 8192)\n"
             "  --ram-size <bytes>           RAM size hint for image header (arm32/rv32)\n"
             "  --autofix                    Prepopulate sysfix targets from Kernel module\n"
             "  --sysfix <name>=<Mod.Proc>   Override sysfix target (e.g. new=Kernel.NewRec)\n"
@@ -2934,8 +3024,15 @@ static Options parse_args(int argc, char **argv) {
             opt.command = argv[++i];
         } else if (strcmp(a, "--multiboot") == 0) {
             opt.multiboot = true;
-        } else if (strcmp(a, "--enable-stack") == 0) {
-            opt.enable_stack = true;
+            } else if (strcmp(a, "--enable-stack") == 0) {
+                opt.enable_stack = true;
+            } else if (strcmp(a, "--stack-size") == 0 && i + 1 < argc) {
+                errno = 0;
+                char *end = NULL;
+                long v = strtol(argv[++i], &end, 0);
+                if (errno != 0 || !end || *end != 0 || v <= 0)
+                    halt_msg("invalid --stack-size");
+                stackSize = (int32_t)v;
         } else if (strcmp(a, "--ram-size") == 0 && i + 1 < argc) {
             errno = 0;
             char *end = NULL;
@@ -3087,7 +3184,7 @@ int main(int argc, char **argv) {
 
     int32_t stack_size = 0;
     if (opt.enable_stack) {
-        stack_size = STACK_SIZE; // 8 KB stack, TODO: consider this as an additional option
+        stack_size = stackSize;
         imageSize += stack_size;
     }
 
