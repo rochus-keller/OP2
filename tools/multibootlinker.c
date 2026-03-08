@@ -118,6 +118,8 @@ static int32_t stackSize = DEFAULT_STACK_SIZE;
 
 static bool Trace = true;
 static bool TraceMore = false;
+static bool hypToSvc = false;     /* --hyp-to-svc: emit HYP->SVC mode switch (RPi) */
+static bool coreParking = false;  /* --core-parking: park secondary cores in WFE loop (RPi) */
 
 /* ------------------------------------------------------------ */
 /* Basic types */
@@ -987,6 +989,61 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
      *   where imm16 = (imm4 << 12) | imm12, Rd = 13 (SP)
      * ARM encoding for MOVT Rd, #imm16: 0xE34D0000 | (imm4 << 16) | (Rd << 12) | imm12 */
     int32_t emitted = 0;
+
+    /* Optional HYP -> SVC mode switch (--hyp-to-svc).
+     * On RPi 2/3, the GPU bootloader (and QEMU 10.x) starts ARM cores
+     * in HYP mode (EL2).  Some code (e.g. OP2 ARRAY OF CHAR comparisons)
+     * behaves differently in HYP mode.  This sequence drops to SVC mode.
+     *
+     * MRS  r0, CPSR              @ Read current mode     = 0xE10F0000
+     * AND  r0, r0, #0x1F         @ Extract mode bits     = 0xE200001F
+     * CMP  r0, #0x1A             @ 0x1A = HYP mode       = 0xE350001A
+     * BNE  not_hyp               @ Skip if not HYP       = 0x1A000003
+     * MRS  r0, CPSR              @ Read CPSR again       = 0xE10F0000
+     * BIC  r0, r0, #0x1F         @ Clear mode bits       = 0xE3C0001F
+     * ORR  r0, r0, #0x13         @ Set SVC mode (0x13)   = 0xE3800013
+     * MSR  SPSR_hyp, r0          @ Set target mode       = 0xE169F000
+     * MSR  ELR_hyp, lr           @ Set return address    = 0xE12EF30E
+     *                            @ (next instruction after ERET)
+     * ERET                       @ Exception return      = 0xE160006E
+     * not_hyp:
+     */
+    if (hypToSvc) {
+        write_i32_le(out, (int32_t)0xE10F0000u);  /* MRS r0, CPSR */
+        write_i32_le(out, (int32_t)0xE200001Fu);  /* AND r0, r0, #0x1F */
+        write_i32_le(out, (int32_t)0xE350001Au);  /* CMP r0, #0x1A */
+        write_i32_le(out, (int32_t)0x1A000005u);  /* BNE not_hyp (+6 instr, skip to after ERET) */
+        write_i32_le(out, (int32_t)0xE10F0000u);  /* MRS r0, CPSR */
+        write_i32_le(out, (int32_t)0xE3C0001Fu);  /* BIC r0, r0, #0x1F */
+        write_i32_le(out, (int32_t)0xE3800013u);  /* ORR r0, r0, #0x13 */
+        write_i32_le(out, (int32_t)0xE169F000u);  /* MSR SPSR_hyp, r0 */
+        /* ADR lr, not_hyp: compute lr = pc + 4 (skip ERET) */
+        write_i32_le(out, (int32_t)0xE28FE004u);  /* ADD lr, pc, #4 */
+        write_i32_le(out, (int32_t)0xE160006Eu);  /* ERET */
+        /* not_hyp: */
+        emitted += 40;
+    }
+
+    /* Optional core parking (--core-parking).
+     * On raspi2b/raspi3b, all 4 cores start executing.  Only core 0
+     * should run the init code; the others must spin.
+     *
+     * MRC p15, 0, r0, c0, c0, 5  @ Read MPIDR          = 0xEE100FB0
+     * ANDS r0, r0, #3            @ Extract core ID      = 0xE2100003
+     * BEQ skip                   @ Core 0 -> continue   = 0x0A000001
+     * wfe_loop:
+     * WFE                        @ Wait for event       = 0xE320F002
+     * B wfe_loop                 @ Loop forever          = 0xEAFFFFFE
+     * skip:
+     */
+    if (coreParking) {
+        write_i32_le(out, (int32_t)0xEE100FB0u);  /* MRC p15, 0, r0, c0, c0, 5 */
+        write_i32_le(out, (int32_t)0xE2100003u);  /* ANDS r0, r0, #3 */
+        write_i32_le(out, (int32_t)0x0A000001u);  /* BEQ skip (+2 instructions) */
+        write_i32_le(out, (int32_t)0xE320F002u);  /* WFE */
+        write_i32_le(out, (int32_t)0xEAFFFFFEu);  /* B wfe_loop (self) */
+        emitted += 20;
+    }
 
     /* Enable VFP/NEON coprocessor (CP10 + CP11) before any VFP instructions.
      * Required on ARMv7 — without this, VFP instructions cause undefined instruction exceptions.
@@ -2180,14 +2237,14 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
 
     /* Compute preamble size: the arch tells us how many bytes it will emit.
      * i386:  MOV ESP,imm32 (5) + optional PUSH EBX (1) = 5 or 6
-     * ARM32: VFP init (24) + MOVW+MOVT SP (8) + optional PUSH {R2} (4) = 32 or 36
+     * ARM32: core-parking (20) + VFP init (24) + MOVW+MOVT SP (8) + optional PUSH {R2} (4) = 52 or 56
      * RV32:  LUI+ADDI SP (8) + optional ADDI+SW (8) = 8 or 16 */
     int32_t preamble_size = 0;
     if (stack_size > 0) {
         if (arch == &arch_i386)
             preamble_size = multiboot ? 6 : 5;
         else if (arch == &arch_arm32)
-            preamble_size = multiboot ? 36 : 32;
+            preamble_size = multiboot ? 56 : 52;
         else
             preamble_size = multiboot ? 16 : 8;
     }
@@ -2965,6 +3022,8 @@ static void usage(FILE *out) {
             "  --ram-size <bytes>           RAM size hint for image header (arm32/rv32)\n"
             "  --autofix                    Prepopulate sysfix targets from Kernel module\n"
             "  --sysfix <name>=<Mod.Proc>   Override sysfix target (e.g. new=Kernel.NewRec)\n"
+            "  --hyp-to-svc                 Emit HYP->SVC mode switch in preamble (RPi 2/3)\n"
+            "  --core-parking               Park secondary cores in WFE loop (RPi 2/3)\n"
             "  --trace / --no-trace         Enable/disable Trace logging\n"
             "  --trace-more                 Enable TraceMore logging\n");
 }
@@ -3055,6 +3114,10 @@ static Options parse_args(int argc, char **argv) {
             if (idx < 0)
                 halt_msg("unknown sysfix name");
             opt.sysfix_overrides[idx] = eq + 1;
+        } else if (strcmp(a, "--hyp-to-svc") == 0) {
+            hypToSvc = true;
+        } else if (strcmp(a, "--core-parking") == 0) {
+            coreParking = true;
         } else if (strcmp(a, "--no-refs") == 0) {
             includeRefs = false;
         } else if (strcmp(a, "--trace") == 0) {

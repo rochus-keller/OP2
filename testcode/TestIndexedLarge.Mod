@@ -2,21 +2,21 @@ MODULE TestIndexedLarge;
 (* Test 4: Indexed array access within large-offset records.
    Two Page records (4096 bytes each) with indexed array access.
    Tests that AdjustLargeOffset is applied BEFORE index computation. *)
-IMPORT RawOut;
+IMPORT O := RawOut;
 
 VAR pass, fail: LONGINT;
 
  PROCEDURE Check(name: ARRAY OF CHAR; got, expected: LONGINT);
  BEGIN
-  RawOut.String(name);
+  O.String(name);
   IF got = expected THEN
-   RawOut.String(" OK"); INC(pass)
+   O.String(" OK"); INC(pass)
   ELSE
-   RawOut.String(" FAIL got="); RawOut.Int(got, 0);
-   RawOut.String(" expected="); RawOut.Int(expected, 0);
+   O.String(" FAIL got="); O.Int(got, 0);
+   O.String(" expected="); O.Int(expected, 0);
    INC(fail)
   END;
-  RawOut.Ln
+  O.Ln
  END Check;
 
  PROCEDURE TestIndexedWrite;
@@ -25,7 +25,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR p1, p2: Page; i: LONGINT;
  BEGIN
-  RawOut.String("--- Indexed write to large records ---"); RawOut.Ln;
+  O.String("--- Indexed write to large records ---"); O.Ln;
   i := 0;
   WHILE i < 1024 DO
    p1.data[i] := i;
@@ -49,7 +49,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR b: BigArr; i, sum: LONGINT;
  BEGIN
-  RawOut.String("--- Indexed read-back from 8K record ---"); RawOut.Ln;
+  O.String("--- Indexed read-back from 8K record ---"); O.Ln;
   i := 0;
   WHILE i < 2048 DO
    b.arr[i] := i MOD 100;
@@ -75,7 +75,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR p: Page; idx: LONGINT;
  BEGIN
-  RawOut.String("--- Dynamic index into large record ---"); RawOut.Ln;
+  O.String("--- Dynamic index into large record ---"); O.Ln;
   idx := 900;
   p.data[idx] := 42;
   Check("p[900]", p.data[idx], 42);
@@ -86,13 +86,13 @@ VAR pass, fail: LONGINT;
 
 BEGIN
  pass := 0; fail := 0;
- RawOut.String("=== TestIndexedLarge: Indexed access + large offset ==="); RawOut.Ln;
+ O.String("=== TestIndexedLarge: Indexed access + large offset ==="); O.Ln;
  TestIndexedWrite;
  TestIndexedReadBack;
  TestDynIndex;
- RawOut.Ln;
- RawOut.String("TestIndexedLarge: "); RawOut.Int(pass, 0);
- RawOut.String(" passed, "); RawOut.Int(fail, 0);
- RawOut.String(" failed"); RawOut.Ln;
- RawOut.Exit(fail)
+ O.Ln;
+ O.String("TestIndexedLarge: "); O.Int(pass, 0);
+ O.String(" passed, "); O.Int(fail, 0);
+ O.String(" failed"); O.Ln;
+ O.Exit(fail)
 END TestIndexedLarge.

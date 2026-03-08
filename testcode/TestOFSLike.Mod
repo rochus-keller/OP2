@@ -7,21 +7,21 @@ MODULE TestOFSLike;
    Note: the current multibootlinker reserves STACK_SIZE=8192 bytes, so this test
    keeps each procedure's local frame below 8KB while still forcing >4096 offsets.
 *)
-IMPORT RawOut;
+IMPORT O := RawOut;
 
 VAR pass, fail: LONGINT;
 
  PROCEDURE Check(name: ARRAY OF CHAR; got, expected: LONGINT);
  BEGIN
-  RawOut.String(name);
+  O.String(name);
   IF got = expected THEN
-   RawOut.String(" OK"); INC(pass)
+   O.String(" OK"); INC(pass)
   ELSE
-   RawOut.String(" FAIL got="); RawOut.Int(got, 0);
-   RawOut.String(" expected="); RawOut.Int(expected, 0);
+   O.String(" FAIL got="); O.Int(got, 0);
+   O.String(" expected="); O.Int(expected, 0);
    INC(fail)
   END;
-  RawOut.Ln
+  O.Ln
  END Check;
 
  PROCEDURE TestOFSLocals;
@@ -34,7 +34,7 @@ VAR pass, fail: LONGINT;
    diskAdr: ARRAY 900 OF LONGINT;  (* 3600 bytes; starts at offset 4096 *)
    result: LONGINT;
  BEGIN
-  RawOut.String("--- OFS-like locals (offsets >4096, frame <8KB) ---"); RawOut.Ln;
+  O.String("--- OFS-like locals (offsets >4096, frame <8KB) ---"); O.Ln;
 
   dp.data[0] := 1;
   dp.data[512] := 2;
@@ -63,7 +63,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR s: Sector; i, sum: LONGINT;
  BEGIN
-  RawOut.String("--- OFS loop (i/sum at offsets >=4096) ---"); RawOut.Ln;
+  O.String("--- OFS loop (i/sum at offsets >=4096) ---"); O.Ln;
   i := 0;
   WHILE i < 1024 DO
    s.data[i] := 1024 - i;
@@ -81,12 +81,12 @@ VAR pass, fail: LONGINT;
 
 BEGIN
  pass := 0; fail := 0;
- RawOut.String("=== TestOFSLike: large frame regression ==="); RawOut.Ln;
+ O.String("=== TestOFSLike: large frame regression ==="); O.Ln;
  TestOFSLocals;
  TestOFSLoop;
- RawOut.Ln;
- RawOut.String("TestOFSLike: "); RawOut.Int(pass, 0);
- RawOut.String(" passed, "); RawOut.Int(fail, 0);
- RawOut.String(" failed"); RawOut.Ln;
- RawOut.Exit(fail)
+ O.Ln;
+ O.String("TestOFSLike: "); O.Int(pass, 0);
+ O.String(" passed, "); O.Int(fail, 0);
+ O.String(" failed"); O.Ln;
+ O.Exit(fail)
 END TestOFSLike.

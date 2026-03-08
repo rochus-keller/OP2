@@ -3,33 +3,33 @@ MODULE TestVFPLarge;
    VFP load/store uses 8-bit word-aligned offset, so the limit is 1024 bytes.
    A record with 256 LONGINTs (1024 bytes) of padding followed by a REAL
    field at offset 1024 triggers the fix. *)
-IMPORT RawOut;
+IMPORT O := RawOut;
 
 VAR pass, fail: LONGINT;
 
  PROCEDURE Check(name: ARRAY OF CHAR; got, expected: LONGINT);
  BEGIN
-  RawOut.String(name);
+  O.String(name);
   IF got = expected THEN
-   RawOut.String(" OK"); INC(pass)
+   O.String(" OK"); INC(pass)
   ELSE
-   RawOut.String(" FAIL got="); RawOut.Int(got, 0);
-   RawOut.String(" expected="); RawOut.Int(expected, 0);
+   O.String(" FAIL got="); O.Int(got, 0);
+   O.String(" expected="); O.Int(expected, 0);
    INC(fail)
   END;
-  RawOut.Ln
+  O.Ln
  END Check;
 
  PROCEDURE CheckReal(name: ARRAY OF CHAR; got, expected: REAL);
  BEGIN
-  RawOut.String(name);
+  O.String(name);
   IF got = expected THEN
-   RawOut.String(" OK"); INC(pass)
+   O.String(" OK"); INC(pass)
   ELSE
-   RawOut.String(" FAIL");
+   O.String(" FAIL");
    INC(fail)
   END;
-  RawOut.Ln
+  O.Ln
  END CheckReal;
 
  PROCEDURE TestFloatAt1024;
@@ -39,7 +39,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR r: Rec1K;
  BEGIN
-  RawOut.String("--- REAL at offset 1024 ---"); RawOut.Ln;
+  O.String("--- REAL at offset 1024 ---"); O.Ln;
   r.pad[0] := 1;
   r.pad[255] := 255;
   r.f := 3.14;
@@ -55,7 +55,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR r: Rec2K;
  BEGIN
-  RawOut.String("--- REAL at offset 2048 ---"); RawOut.Ln;
+  O.String("--- REAL at offset 2048 ---"); O.Ln;
   r.pad[0] := 10;
   r.pad[511] := 511;
   r.f := 5.0;
@@ -77,7 +77,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR r: BigFloat;
  BEGIN
-  RawOut.String("--- Float compute past 1024 ---"); RawOut.Ln;
+  O.String("--- Float compute past 1024 ---"); O.Ln;
   r.a := 10.0;
   r.b := 3.0;
   r.c := r.a + r.b;
@@ -90,13 +90,13 @@ VAR pass, fail: LONGINT;
 
 BEGIN
  pass := 0; fail := 0;
- RawOut.String("=== TestVFPLarge: VLDR/VSTR large offset ==="); RawOut.Ln;
+ O.String("=== TestVFPLarge: VLDR/VSTR large offset ==="); O.Ln;
  TestFloatAt1024;
  TestFloatAt2048;
  TestFloatCompute;
- RawOut.Ln;
- RawOut.String("TestVFPLarge: "); RawOut.Int(pass, 0);
- RawOut.String(" passed, "); RawOut.Int(fail, 0);
- RawOut.String(" failed"); RawOut.Ln;
- RawOut.Exit(fail)
+ O.Ln;
+ O.String("TestVFPLarge: "); O.Int(pass, 0);
+ O.String(" passed, "); O.Int(fail, 0);
+ O.String(" failed"); O.Ln;
+ O.Exit(fail)
 END TestVFPLarge.

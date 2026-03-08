@@ -2,21 +2,21 @@ MODULE TestLargeLocal;
 (* Test 1: LDR/STR with large offset (>4096 bytes).
    A record with a 1024-element LONGINT array (4096 bytes) followed by a flag
    field at offset 4096 -- exactly the limit for ARM LDR/STR 12-bit immediate. *)
-IMPORT RawOut;
+IMPORT O := RawOut;
 
 VAR pass, fail: LONGINT;
 
  PROCEDURE Check(name: ARRAY OF CHAR; got, expected: LONGINT);
  BEGIN
-  RawOut.String(name);
+  O.String(name);
   IF got = expected THEN
-   RawOut.String(" OK"); INC(pass)
+   O.String(" OK"); INC(pass)
   ELSE
-   RawOut.String(" FAIL got="); RawOut.Int(got, 0);
-   RawOut.String(" expected="); RawOut.Int(expected, 0);
+   O.String(" FAIL got="); O.Int(got, 0);
+   O.String(" expected="); O.Int(expected, 0);
    INC(fail)
   END;
-  RawOut.Ln
+  O.Ln
  END Check;
 
  PROCEDURE TestBigRecord;
@@ -26,7 +26,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR r: BigRec;
  BEGIN
-  RawOut.String("--- BigRecord (offset 4096) ---"); RawOut.Ln;
+  O.String("--- BigRecord (offset 4096) ---"); O.Ln;
   r.data[0] := 11111;
   r.data[512] := 22222;
   r.data[1023] := 33333;
@@ -44,7 +44,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR h: HugeRec;
  BEGIN
-  RawOut.String("--- HugeRecord (offset 8192) ---"); RawOut.Ln;
+  O.String("--- HugeRecord (offset 8192) ---"); O.Ln;
   h.pad[0] := 100;
   h.pad[2047] := 200;
   h.val := 54321;
@@ -55,12 +55,12 @@ VAR pass, fail: LONGINT;
 
 BEGIN
  pass := 0; fail := 0;
- RawOut.String("=== TestLargeLocal: LDR/STR large offset ==="); RawOut.Ln;
+ O.String("=== TestLargeLocal: LDR/STR large offset ==="); O.Ln;
  TestBigRecord;
  TestEvenLarger;
- RawOut.Ln;
- RawOut.String("TestLargeLocal: "); RawOut.Int(pass, 0);
- RawOut.String(" passed, "); RawOut.Int(fail, 0);
- RawOut.String(" failed"); RawOut.Ln;
- RawOut.Exit(fail)
+ O.Ln;
+ O.String("TestLargeLocal: "); O.Int(pass, 0);
+ O.String(" passed, "); O.Int(fail, 0);
+ O.String(" failed"); O.Ln;
+ O.Exit(fail)
 END TestLargeLocal.

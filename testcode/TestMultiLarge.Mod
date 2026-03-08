@@ -2,21 +2,21 @@ MODULE TestMultiLarge;
 (* Test 2: Multiple large local records with cumulative offset > 4096.
    Two Page records (4096 bytes each) + extra LONGINT, testing that the
    compiler correctly materializes large offsets for each variable. *)
-IMPORT RawOut;
+IMPORT O := RawOut;
 
 VAR pass, fail: LONGINT;
 
  PROCEDURE Check(name: ARRAY OF CHAR; got, expected: LONGINT);
  BEGIN
-  RawOut.String(name);
+  O.String(name);
   IF got = expected THEN
-   RawOut.String(" OK"); INC(pass)
+   O.String(" OK"); INC(pass)
   ELSE
-   RawOut.String(" FAIL got="); RawOut.Int(got, 0);
-   RawOut.String(" expected="); RawOut.Int(expected, 0);
+   O.String(" FAIL got="); O.Int(got, 0);
+   O.String(" expected="); O.Int(expected, 0);
    INC(fail)
   END;
-  RawOut.Ln
+  O.Ln
  END Check;
 
  PROCEDURE TestTwoPages;
@@ -25,7 +25,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR p1, p2: Page; x: LONGINT;
  BEGIN
-  RawOut.String("--- Two Pages + extra var ---"); RawOut.Ln;
+  O.String("--- Two Pages + extra var ---"); O.Ln;
   p1.data[0] := 1000;
   p1.data[511] := 2000;
   p1.data[1023] := 3000;
@@ -49,7 +49,7 @@ VAR pass, fail: LONGINT;
   END;
   VAR src, dst: Page; i: LONGINT;
  BEGIN
-  RawOut.String("--- Cross-copy large records ---"); RawOut.Ln;
+  O.String("--- Cross-copy large records ---"); O.Ln;
   src.data[0] := 100;
   src.data[500] := 200;
   src.data[1023] := 300;
@@ -63,12 +63,12 @@ VAR pass, fail: LONGINT;
 
 BEGIN
  pass := 0; fail := 0;
- RawOut.String("=== TestMultiLarge: Multiple large locals ==="); RawOut.Ln;
+ O.String("=== TestMultiLarge: Multiple large locals ==="); O.Ln;
  TestTwoPages;
  TestCrossAccess;
- RawOut.Ln;
- RawOut.String("TestMultiLarge: "); RawOut.Int(pass, 0);
- RawOut.String(" passed, "); RawOut.Int(fail, 0);
- RawOut.String(" failed"); RawOut.Ln;
- RawOut.Exit(fail)
+ O.Ln;
+ O.String("TestMultiLarge: "); O.Int(pass, 0);
+ O.String(" passed, "); O.Int(fail, 0);
+ O.String(" failed"); O.Ln;
+ O.Exit(fail)
 END TestMultiLarge.
