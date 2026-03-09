@@ -12,6 +12,7 @@ Changes
 - Changed OPA so that it can parse source files with Unix endings too
 - Refactored OPT, OPM and OPB, so that i386 no longer leaks into frontend, abstracted away into new OPTR
 - Refactored OPC and OPL; OPC is now fully target independent; IR defs and data in new OPIR, no longer in OPL.
+- Added ARMv7 backend compatible with Raspberry Pi Model 3b and Zero 2
 
 
 The .Mod files can be transpiled to C99 files using the AoCodeNavigator; these files are

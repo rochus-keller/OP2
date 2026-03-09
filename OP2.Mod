@@ -2,7 +2,7 @@
 
 MODULE OP2;
  IMPORT
-  OPP, OPB, OPV, OPT, OPS, OPC, OPL, OPO, OPM, Out, Texts, Oberon;
+  OPP, OPB, OPV, OPT, OPS, OPC, OPL, OPO, OPM, OPTR, Out, Texts, Oberon;
  
  CONST
   NoBreakPC = -1;
@@ -11,9 +11,9 @@ MODULE OP2;
    
  PROCEDURE SignOn;
  BEGIN
-  Out.String("Oberon Portable Compiler / nw, rc, nm, tk, prk"); Out.Ln;
-  Out.String(OPP.SignOnMessage); Out.Ln; 
-  Out.String("C99 version by me@rochus-keller.ch"); Out.Ln;
+  Out.String("Oberon Portable Compiler / nw, rc, nm, tk, prk / "); 
+  Out.String(OPTR.Target); Out.String(" target"); Out.Ln; 
+  Out.String("C99 version and ARMv7 backend by me@rochus-keller.ch"); Out.Ln;
  END SignOn;
  
  PROCEDURE ParseOptions(VAR name, options, path, pref, extension: ARRAY OF CHAR;  VAR codeOpt, parserOpt: SET);
