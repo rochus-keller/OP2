@@ -14,7 +14,6 @@ Changes
 - Refactored OPC and OPL; OPC is now fully target independent; IR defs and data in new OPIR, no longer in OPL.
 - Added ARMv7 backend compatible with Raspberry Pi Model 3b and Zero 2
 
-
 The .Mod files can be transpiled to C99 files using the AoCodeNavigator; these files are
 put into the c99 directory and built with build.sh. The resulting executable
 runs on all platforms and generates x86 OP2 v2.3.7 object files compatible with
@@ -28,3 +27,4 @@ Multiboot header and add stack initialization. With this, e.g. the MainLoop test
 together with the RawOut module work well on QEMU. Newer versions of the bootlinker
 include multi-target support.
 
+NOTE that the ARMv7 backend is WORK-IN-PROGRESS
