@@ -858,6 +858,14 @@ MODULE OPL; (** non-portable *)
 
 (* Load / Store / LEA  *)
 
+ PROCEDURE MapSysReg(hint: LONGINT): SHORTINT;
+ BEGIN
+  IF hint = 4 THEN RETURN SP
+  ELSIF hint = 5 THEN RETURN FP
+  ELSE RETURN SHORT(SHORT(hint))
+  END
+ END MapSysReg;
+ 
  PROCEDURE Load(VAR instr: Instruction);
    VAR
     mode, size, base, inx, dummy, memBase: SHORTINT;
@@ -887,24 +895,27 @@ MODULE OPL; (** non-portable *)
   IF op # PUTreg THEN AssignReg(instr.dest, base, base, inx) END;
   
   IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
-   OPO.GenMOVW(CondAL, instr.reg, disp MOD 10000H);
+   (* Use IP to build the address to prevent overwriting 'inx' 
+      if the allocator reused the index register for instr.reg *)
+   OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
    IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
-   OPO.GenMOVT(CondAL, instr.reg, disp DIV 10000H MOD 10000H);
+   OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
    IF inx > none THEN
     IF instr.scale > 0 THEN
-     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, instr.reg, instr.reg, inx, ShiftLSL, instr.scale)
-    ELSE OPO.GenADD(CondAL, instr.reg, instr.reg, inx) END
+     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
+    ELSE OPO.GenADD(CondAL, IP, IP, inx) END
    END;
    CASE op OF
     Ld:
-     IF size = Bit8 THEN OPO.GenLDRB(CondAL, instr.reg, instr.reg, 0)
-     ELSIF size = Bit16 THEN OPO.GenLDRH(CondAL, instr.reg, instr.reg, 0)
-     ELSE OPO.GenLDR(CondAL, instr.reg, instr.reg, 0) END
+     IF size = Bit8 THEN OPO.GenLDRB(CondAL, instr.reg, IP, 0)
+     ELSIF size = Bit16 THEN OPO.GenLDRH(CondAL, instr.reg, IP, 0)
+     ELSE OPO.GenLDR(CondAL, instr.reg, IP, 0) END
     | Lea:
-    | Ldbdw, Ldbw: OPO.GenLDRSB(CondAL, instr.reg, instr.reg, 0)
-    | Ldwdw: OPO.GenLDRSH(CondAL, instr.reg, instr.reg, 0)
-    | Ldbdwu, Ldbwu: OPO.GenLDRB(CondAL, instr.reg, instr.reg, 0)
-    | Ldwdwu: OPO.GenLDRH(CondAL, instr.reg, instr.reg, 0)
+     IF instr.reg # IP THEN OPO.GenMOVReg(CondAL, instr.reg, IP) END
+    | Ldbdw, Ldbw: OPO.GenLDRSB(CondAL, instr.reg, IP, 0)
+    | Ldwdw: OPO.GenLDRSH(CondAL, instr.reg, IP, 0)
+    | Ldbdwu, Ldbwu: OPO.GenLDRB(CondAL, instr.reg, IP, 0)
+    | Ldwdwu: OPO.GenLDRH(CondAL, instr.reg, IP, 0)
    ELSE HALT(BUG) END;
    dummy := none;
    DecCheckReg(instr.dest, dummy, base, inx);
@@ -952,9 +963,9 @@ MODULE OPL; (** non-portable *)
     IF mode = RegReg THEN OPO.GenUXTH(CondAL, instr.reg, memBase)
     ELSE OPO.GenLDRH(CondAL, instr.reg, memBase, disp) END
    | PUTreg:
-    IF mode = ImmReg THEN OPO.LoadImm32(CondAL, SHORT(SHORT(instr.hint)), instr.src2)
+    IF mode = ImmReg THEN OPO.LoadImm32(CondAL, MapSysReg(instr.hint), instr.src2)
     ELSE
-     IF SHORT(SHORT(instr.hint)) # base THEN OPO.GenMOVReg(CondAL, SHORT(SHORT(instr.hint)), base) END
+     IF MapSysReg(instr.hint) # base THEN OPO.GenMOVReg(CondAL, MapSysReg(instr.hint), base) END
     END
   ELSE HALT(BUG) END;
   dummy := none;
@@ -986,9 +997,6 @@ MODULE OPL; (** non-portable *)
   BEGIN
    FindMemReg(instr, mode, size, base, inx, disp);
 
-   (* Evaluate the value to store first! 
-      FindLoadReg can emit nested load instructions which use IP as a scratch register. 
-      If we evaluate it later, it will clobber the destination address we build in IP. *)
    IF instr.op DIV 32 # GETreg THEN
     FindLoadReg(instr.dest, reg);
    ELSE
@@ -1005,9 +1013,10 @@ MODULE OPL; (** non-portable *)
      ELSE OPO.GenADD(CondAL, IP, IP, inx) END
     END;
     IF instr.op DIV 32 = GETreg THEN
-     IF size = Bit8 THEN OPO.GenSTRB(CondAL, SHORT(SHORT(instr.hint)), IP, 0)
-     ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, SHORT(SHORT(instr.hint)), IP, 0)
-     ELSE OPO.GenSTR(CondAL, SHORT(SHORT(instr.hint)), IP, 0) END
+     (* Translate system register hints to real hardware SP/FP *)
+     IF size = Bit8 THEN OPO.GenSTRB(CondAL, MapSysReg(instr.hint), IP, 0)
+     ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, MapSysReg(instr.hint), IP, 0)
+     ELSE OPO.GenSTR(CondAL, MapSysReg(instr.hint), IP, 0) END
     ELSE
      IF size = Bit8 THEN OPO.GenSTRB(CondAL, reg, IP, 0)
      ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, reg, IP, 0)
@@ -1028,9 +1037,10 @@ MODULE OPL; (** non-portable *)
     memBase := IP
    END;
    IF instr.op DIV 32 = GETreg THEN
-    IF size = Bit8 THEN OPO.GenSTRB(CondAL, SHORT(SHORT(instr.hint)), memBase, disp)
-    ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, SHORT(SHORT(instr.hint)), memBase, disp)
-    ELSE OPO.GenSTR(CondAL, SHORT(SHORT(instr.hint)), memBase, disp) END
+    (* CRITICAL FIX: Translate system register hints to real hardware SP/FP *)
+    IF size = Bit8 THEN OPO.GenSTRB(CondAL, MapSysReg(instr.hint), memBase, disp)
+    ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, MapSysReg(instr.hint), memBase, disp)
+    ELSE OPO.GenSTR(CondAL, MapSysReg(instr.hint), memBase, disp) END
    ELSE
     IF size = Bit8 THEN OPO.GenSTRB(CondAL, reg, memBase, disp)
     ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, reg, memBase, disp)
@@ -1391,44 +1401,29 @@ MODULE OPL; (** non-portable *)
   AssignReg(instr.dest, src, base, dummy);
 
   IF hasHWDiv THEN
-   (* Save dividend and divisor to stack (avoids all aliasing hazards) *)
-   OPO.GenPushReg(CondAL, src);   (* push dividend; [SP] = dividend *)
-   OPO.GenPushReg(CondAL, base);  (* push divisor;  [SP] = divisor, [SP+4] = dividend *)
-
-   (* SDIV: quotient in instr.reg *)
+   OPO.GenPushReg(CondAL, src);   
+   OPO.GenPushReg(CondAL, base);  
    OPO.GenSDIV(CondAL, instr.reg, src, base);
    OPO.GenPushReg(CondAL, instr.reg);
-   (* Stack: [quotient(SP+0), divisor(SP+4), dividend(SP+8)] *)
-
-   (* Compute remainder = dividend - quotient * divisor *)
-   OPO.GenLDR(CondAL, instr.reg, SP, 0);  (* instr.reg = quotient *)
-   OPO.GenLDR(CondAL, IP, SP, 4);         (* IP = divisor *)
-   OPO.GenMUL(CondAL, IP, instr.reg, IP); (* IP = quotient * divisor *)
-   OPO.GenLDR(CondAL, instr.reg, SP, 8);  (* instr.reg = dividend *)
-   OPO.GenSUB(CondAL, IP, instr.reg, IP); (* IP = remainder *)
-
-   (* Oberon Floor correction: if (rem != 0) AND ((dividend EOR divisor) < 0), q = q - 1 *)
-   EmitCmpImm(CondAL, IP, 0);             (* CMP rem, #0 *)
-   OPO.GenLDR(CondAL, instr.reg, SP, 8);  (* load dividend *)
-   OPO.GenLDR(CondNE, IP, SP, 4);         (* if rem != 0: IP = divisor *)
-   OPO.GenEORReg(CondNE, IP, instr.reg, IP); (* if rem != 0: IP = dividend EOR divisor *)
-   OPO.GenShiftImm(CondAL, IP, IP, ShiftASR, 31); (* if rem == 0, 0>>31 = 0. Else sign bit (0 or -1) *)
-
-   (* Apply correction to quotient *)
-   OPO.GenLDR(CondAL, instr.reg, SP, 0);           (* instr.reg = quotient *)
-   OPO.GenADD(CondAL, instr.reg, instr.reg, IP);   (* q = q + (-1 or 0) *)
-
+   OPO.GenLDR(CondAL, instr.reg, SP, 0);  
+   OPO.GenLDR(CondAL, IP, SP, 4);         
+   OPO.GenMUL(CondAL, IP, instr.reg, IP); 
+   OPO.GenLDR(CondAL, instr.reg, SP, 8);  
+   OPO.GenSUB(CondAL, IP, instr.reg, IP); 
+   EmitCmpImm(CondAL, IP, 0);             
+   OPO.GenLDR(CondAL, instr.reg, SP, 8);  
+   OPO.GenLDR(CondNE, IP, SP, 4);         
+   OPO.GenEORReg(CondNE, IP, instr.reg, IP); 
+   OPO.GenShiftImm(CondAL, IP, IP, ShiftASR, 31); 
+   OPO.GenLDR(CondAL, instr.reg, SP, 0);           
+   OPO.GenADD(CondAL, instr.reg, instr.reg, IP);   
    IF ~isDiv THEN
-    (* MOD: result = dividend - corrected_quotient * divisor *)
-    OPO.GenLDR(CondAL, IP, SP, 4);                 (* IP = divisor *)
-    OPO.GenMUL(CondAL, IP, instr.reg, IP);         (* IP = corrected_quotient * divisor *)
-    OPO.GenLDR(CondAL, instr.reg, SP, 8);          (* instr.reg = dividend *)
-    OPO.GenSUB(CondAL, instr.reg, instr.reg, IP)   (* instr.reg = floor mod *)
+    OPO.GenLDR(CondAL, IP, SP, 4);                 
+    OPO.GenMUL(CondAL, IP, instr.reg, IP);         
+    OPO.GenLDR(CondAL, instr.reg, SP, 8);          
+    OPO.GenSUB(CondAL, instr.reg, instr.reg, IP)   
    END;
-
-   (* Clean up stack: pop quotient + divisor + dividend = 12 bytes *)
    OPO.GenADDImm(CondAL, SP, SP, 12)
-
   ELSE
    (* === Sysfix BL path (fallback) === *)
    OPO.GenPushReg(CondAL, base);  
@@ -1440,7 +1435,8 @@ MODULE OPL; (** non-portable *)
    ELSE
     IF instr.reg # 1 THEN OPO.GenMOVReg(CondAL, instr.reg, 1) END
    END;
-   OPO.GenADDImm(CondAL, SP, SP, 8)
+   (* Removed OPO.GenADDImm(CondAL, SP, SP, 8).
+      Oberon uses callee-cleanup. DivMod32 pops its own 8 bytes.*)
   END;
 
   DecCheckReg(instr.dest, src, base, dummy)
@@ -1449,7 +1445,7 @@ MODULE OPL; (** non-portable *)
  PROCEDURE Flags(VAR instr: Instruction);
  (* cmp, bt, test: set condition flags *)
   VAR
-   mode, size, base, inx, reg, tmp: SHORTINT;
+   mode, size, base, inx, reg: SHORTINT;
    disp: LONGINT;
    op: LONGINT;
  BEGIN
@@ -1479,24 +1475,21 @@ MODULE OPL; (** non-portable *)
   END;
   IF op = Cmp THEN
    IF mode = ImmReg THEN EmitCmpImm(CondAL, reg, instr.src2)
-   ELSE OPO.GenCMPReg(CondAL, reg, base)
-   END
+   ELSE OPO.GenCMPReg(CondAL, reg, base) END
   ELSIF op = Test THEN
    IF mode = ImmReg THEN EmitTstImm(CondAL, reg, instr.src2)
-   ELSE OPO.GenTSTReg(CondAL, reg, base)
-   END
+   ELSE OPO.GenTSTReg(CondAL, reg, base) END
   ELSE (* Bt: bit test - test bit position *)
-   GetReg(tmp);
+   (* Shift bit to MSB and compare natively via scratch register IP.
+      This prevents tmp register clobbering and guarantees correct Carry (CS/CC) flags *)
    IF mode = ImmReg THEN
-    OPO.GenShiftImm(CondAL, tmp, reg, ShiftLSL, SHORT(31 - (instr.src2 MOD 32)));
-    EmitCmpImm(CondAL, tmp, 080000000H)
+    OPO.GenShiftImm(CondAL, IP, reg, ShiftLSL, SHORT(31 - (instr.src2 MOD 32)));
+    OPO.PutWord(0E35C0102H) (* CMP IP, #0x80000000 *)
    ELSE
-    EmitAndImm(CondAL, tmp, base, 31);
-    EmitRsbImm(CondAL, tmp, tmp, 31);
-    OPO.GenShiftReg(CondAL, tmp, reg, ShiftLSL, tmp);
-    EmitCmpImm(CondAL, tmp, 080000000H)
-   END;
-   FreeReg(tmp)
+    EmitRsbImm(CondAL, IP, base, 31);
+    OPO.GenShiftReg(CondAL, IP, reg, ShiftLSL, IP);
+    OPO.PutWord(0E35C0102H) (* CMP IP, #0x80000000 *)
+   END
   END;
   DecReg(reg); DecReg(base); DecReg(inx)
  END Flags;
@@ -1551,8 +1544,8 @@ MODULE OPL; (** non-portable *)
      On i386 the front-end does SUB ESP,size then REP MOVSD to [EDI] leaving ESP
      unchanged.  On ARM the copy loop used post-increment on SP, moving SP past
      the data.  The callee cleanup (ADD SP,paramSize) then over-corrects SP.
-     Fix: when dest=SP and forward, copy in REVERSE order using pre-decrement
-     stores (STR IP,[SP,#-step]!).  This naturally decrements SP by totalBytes
+     So when dest=SP and forward, copy in REVERSE order using pre-decrement
+     stores (STR IP,[SP,#-step]).  This also decrements SP by totalBytes
      (allocating stack space) and leaves the data in the correct order for the
      callee to read at [FP+8].  The callee ADD SP,paramSize then correctly
      restores SP.  We first adjust src to point to the END of the source. *)
@@ -1571,7 +1564,8 @@ MODULE OPL; (** non-portable *)
   END;
   (* CMP nofElem, #0; BEQ past loop *)
   EmitCmpImm(CondAL, nofElem, 0);
-  OPO.GenB(CondEQ, 12); (* skip 3 instructions: load, store, subs; BNE is 4th *)
+  (* Use CondLE (Less/Equal) instead of CondEQ. *)
+  OPO.GenB(CondLE, 12); 
   Lloop := OPO.pc;
   IF stackPush THEN
    (* Pre-decrement copy: read backward from source end, push onto stack *)
@@ -1590,72 +1584,56 @@ MODULE OPL; (** non-portable *)
    OPO.GenLDRBPost(CondAL, IP, src, step);
    OPO.GenSTRBPost(CondAL, IP, dest, step)
   END;
-  (* SUBS nofElem, nofElem, #1 *)
   OPO.GenDataProcImm(CondAL, OPO.dpSUB, 1, nofElem, nofElem, 1);
-  (* BNE Lloop *)
   OPO.GenB(CondNE, Lloop - (OPO.pc + 8));
   IF reverse THEN
-   (* the front-end uses useReg4 to place the aligned buffer address in R4.
-      On i386, register 4 IS ESP, so the stack pointer was updated implicitly.
-      On ARM, register 4 = R4 (general purpose), not SP (R13).
-      Update SP so the subsequent "Store SP -> parameter" writes the buffer address. *)
    OPO.GenMOVReg(CondAL, SP, 4)  (* MOV SP, R4 *)
   END;
   DecReg(dest); DecReg(src); DecReg(nofElem)
  END GenRepMovs;
 
-  PROCEDURE GenCmpString(VAR instr: Instruction);
+ PROCEDURE GenCmpString(VAR instr: Instruction);
  (* cmpString: compare two null-terminated strings *)
   VAR srcAdr, src2Adr, ch1, ch2: SHORTINT; Lloop, Ldone: LONGINT;
  BEGIN
-  (* Load both operands safely using loaded() checks to prevent cascading eviction *)
   IF loaded(instr.src2) THEN
    FindReg(instr.src2, src2Adr);
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, srcAdr)
-   ELSE FindReg(instr.src1, srcAdr)
-   END
+   ELSE FindReg(instr.src1, srcAdr) END
   ELSE
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, srcAdr)
-   ELSE FindReg(instr.src1, srcAdr)
-   END;
+   ELSE FindReg(instr.src1, srcAdr) END;
    FindLoadReg(instr.src2, src2Adr)
   END;
   GetReg(ch1); GetReg(ch2);
   Lloop := OPO.pc;
-  (* LDRB ch1, [srcAdr], #1 *)
   OPO.GenLDRBPost(CondAL, ch1, srcAdr, 1);
-  (* LDRB ch2, [src2Adr], #1 *)
   OPO.GenLDRBPost(CondAL, ch2, src2Adr, 1);
-  (* CMP ch1, ch2 *)
   OPO.GenCMPReg(CondAL, ch1, ch2);
-  (* BNE done *)
+  
   OPO.GenB(CondNE, 4); Ldone := OPO.pc - 4;
-  (* CMP ch1, #0 *)
-  EmitCmpImm(CondAL, ch1, 0);
-  (* BNE loop *)
+  
+  OPO.GenDataProcImm(CondAL, OPO.dpCMP, 1, 0, ch1, 0);
   OPO.GenB(CondNE, Lloop - (OPO.pc + 8));
-  (* done: flags set from last CMP *)
+  
   FreeReg(ch1); FreeReg(ch2);
   DecReg(srcAdr); DecReg(src2Adr)
  END GenCmpString;
 
  PROCEDURE GenShort(VAR instr: Instruction);
- (* short: truncate to shorter type *)
+ (* short: truncate to shorter type with correct sign-extension *)
   VAR src: SHORTINT; size: LONGINT;
  BEGIN
   FindReg(instr.src1, src);
   size := (instr.op MOD 8) * 8;
   ASSERT(LastUse(src));
   IF size = Bit16 THEN
-   (* Truncate to 16-bit: AND with 0xFFFF *)
-   EmitAndImm(CondAL, src, src, 0FFFFH);
-   FreeReg(src);
-   AssignThisReg(instr.dest, src)
+   (* Sign-extend 16-bit so negative font offsets stay negative *)
+   OPO.GenSXTH(CondAL, src, src);
   ELSE (* Bit8 *)
-   EmitAndImm(CondAL, src, src, 0FFH);
-   FreeReg(src);
-   AssignThisReg(instr.dest, src)
-  END
+   OPO.GenSXTB(CondAL, src, src);
+  END;
+  AssignThisReg(instr.dest, src)
  END GenShort;
 
   PROCEDURE GenPhi(VAR instr: Instruction);
@@ -1726,7 +1704,7 @@ MODULE OPL; (** non-portable *)
 
  PROCEDURE Fload(VAR instr: Instruction);
   VAR
-   mode, size, base, inx: SHORTINT;
+   mode, size, base, inx, memBase: SHORTINT;
    disp: LONGINT;
    isSingle: BOOLEAN;
    freg: SHORTINT;
@@ -1735,10 +1713,17 @@ MODULE OPL; (** non-portable *)
    isSingle := (instr.op MOD 8) = 3; 
    AssignFreg(instr.dest);
    FindFreg(instr.dest, freg);
+   
   IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
    OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
    IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
    OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
+   (* Added missing index scale computation for floats *)
+   IF inx > none THEN
+    IF instr.scale > 0 THEN
+     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
+    ELSE OPO.GenADD(CondAL, IP, IP, inx) END
+   END;
    IF instr.op DIV 32 = Fild THEN
     OPO.GenVLDR(CondAL, 1, 0, IP, 0);
     IF isSingle THEN OPO.GenVCVTF32S32(CondAL, FregToSreg(freg), 0)
@@ -1750,31 +1735,48 @@ MODULE OPL; (** non-portable *)
    DecReg(base); DecReg(inx);
    RETURN
   END;
+  
   AdjustLargeOffset(base, disp, 1024);
+  memBase := base;
+  (* dito index scale *)
+  IF inx > none THEN
+   IF instr.scale > 0 THEN
+    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
+   ELSE OPO.GenADD(CondAL, IP, base, inx) END;
+   memBase := IP
+  END;
+  
   IF instr.op DIV 32 = Fild THEN
-   OPO.GenVLDR(CondAL, 1, 0, base, disp); 
+   OPO.GenVLDR(CondAL, 1, 0, memBase, disp); 
    IF isSingle THEN OPO.GenVCVTF32S32(CondAL, FregToSreg(freg), 0)
    ELSE OPO.GenVCVTF64S32(CondAL, freg, 0) END
   ELSE
-   IF isSingle THEN OPO.GenVLDR(CondAL, 1, FregToSreg(freg), base, disp)
-   ELSE OPO.GenVLDR(CondAL, 0, freg, base, disp) END
+   IF isSingle THEN OPO.GenVLDR(CondAL, 1, FregToSreg(freg), memBase, disp)
+   ELSE OPO.GenVLDR(CondAL, 0, freg, memBase, disp) END
   END;
   DecReg(base); DecReg(inx)
  END Fload;
 
  PROCEDURE Fstore(VAR instr: Instruction);
   VAR
-   mode, size, base, inx, src: SHORTINT;
+   mode, size, base, inx, memBase, src: SHORTINT;
    disp: LONGINT;
    isSingle: BOOLEAN;
   BEGIN
    FindMemReg(instr, mode, size, base, inx, disp);
    isSingle := (instr.op MOD 8) = 3; 
    FindFreg(instr.dest, src);
+   
   IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
    OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
    IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
    OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
+   (* dito missing index scale *)
+   IF inx > none THEN
+    IF instr.scale > 0 THEN
+     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
+    ELSE OPO.GenADD(CondAL, IP, IP, inx) END
+   END;
    IF instr.op DIV 32 = Fist THEN
     IF isSingle THEN
      OPO.GenVCVTS32F32(CondAL, 0, FregToSreg(src));
@@ -1791,22 +1793,32 @@ MODULE OPL; (** non-portable *)
    DecReg(base); DecReg(inx);
    RETURN
   END;
+  
   AdjustLargeOffset(base, disp, 1024);
+  memBase := base;
+  (* dito index scale *)
+  IF inx > none THEN
+   IF instr.scale > 0 THEN
+    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
+   ELSE OPO.GenADD(CondAL, IP, base, inx) END;
+   memBase := IP
+  END;
+  
   IF instr.op DIV 32 = Fist THEN
    IF isSingle THEN
     OPO.GenVCVTS32F32(CondAL, 0, FregToSreg(src)); 
-    OPO.GenVSTR(CondAL, 1, 0, base, disp)
+    OPO.GenVSTR(CondAL, 1, 0, memBase, disp)
    ELSE
     OPO.GenVCVTS32F64(CondAL, 0, src); 
-    OPO.GenVSTR(CondAL, 1, 0, base, disp)
+    OPO.GenVSTR(CondAL, 1, 0, memBase, disp)
    END
   ELSE
-   IF isSingle THEN OPO.GenVSTR(CondAL, 1, FregToSreg(src), base, disp)
-   ELSE OPO.GenVSTR(CondAL, 0, src, base, disp) END
+   IF isSingle THEN OPO.GenVSTR(CondAL, 1, FregToSreg(src), memBase, disp)
+   ELSE OPO.GenVSTR(CondAL, 0, src, memBase, disp) END
   END;
   lastFstoreFreg := src;
   IF spSubPending THEN
-   OPO.GenMOVReg(CondAL, SP, base);
+   OPO.GenMOVReg(CondAL, SP, memBase);
    spSubPending := FALSE
   END;
   DecCheckFreg(src);
@@ -2326,6 +2338,10 @@ MODULE OPL; (** non-portable *)
       AddLink(OPIR.Instr[i].src2 DIV 10000H, OPIR.Instr[i].pc)
      | CallReg:
       FindReg(OPIR.Instr[i].src2, reg);
+      (* Prevent jumping to the Reset Vector on NIL pointers *)
+      EmitCmpImm(CondAL, reg, 0);
+      OPO.GenB(CondNE, 0);   (* If NOT NULL, skip the Trap instruction *)
+      GenTrap(3);            (* TRAP 3: FuncTrap (Call of NIL procedure) *)
       OPO.GenBLX(CondAL, reg);
       DecReg(reg)
      | PushReg:

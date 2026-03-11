@@ -2909,7 +2909,7 @@ static void load_module(Module **m_out, const char *name, int32_t *base) {
                     halt_msg("path + module name + extension too long");
                 strcpy(fname, modulePath);
                 char* str = fname + pathLen;
-                if( *str != '/' && str != '\\' )
+                if( *str != '/' && *str != '\\' )
                     (*str++) = '/';
                 strcpy(str, name);
                 str += nameLen;
