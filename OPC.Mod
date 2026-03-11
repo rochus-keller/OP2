@@ -6,7 +6,7 @@ Refer to the license.txt file provided with this distribution. *)
 
 
 MODULE OPC; (** non-portable *)
- IMPORT OPT, OPIR, OPL, OPM, SYSTEM;
+ IMPORT OPT, OPIR, OPL, OPM, OPTR, SYSTEM;
 
 
  CONST
@@ -1447,8 +1447,12 @@ Intel i386 :
     IF (z.typ.size # typ.size) & ((x.mode # Con) OR (typ.size > 4)) THEN OPM.err(-304) END;
     z.typ := typ
     | get8, get16, get32:
-    load(z); z.mode := RegRel; z.offs := 0; z.inx := none; z.typ := typ;
-    load(z); (*load value in register, otherwise SYSTEM.VAL might change the size of the memory access *)
+      load(z); z.mode := RegRel; z.offs := 0; z.inx := none; z.typ := typ;
+      IF OPTR.RequireAlignment & (typ.form IN {Int, LInt, Set, Pointer, ProcTyp}) THEN
+       UnalignedLoad(z, typ)
+      ELSE
+       load(z); (*load value in register, otherwise SYSTEM.VAL might change the size of the memory access *)
+      END
    END
  END SYSmop;
  
@@ -1516,31 +1520,102 @@ Intel i386 :
   END
  END SYSdop;
  
+ PROCEDURE UnalignedLoad*(VAR z: Item; typ: OPT.Struct);
+  VAR x0, x1, x2, x3, t1, shift: Item; form: SHORTINT;
+ BEGIN
+  form := typ.form;
+  IF z.mode # RegRel THEN loadAdr(z); z.mode := RegRel; z.offs := 0; z.inx := none END;
+  x0 := z; x0.typ := OPT.bytetyp;
+  x1 := x0; x2 := x0; x3 := x0;
+  IF OPTR.LittleEndian THEN
+   Field(x1, 1); Field(x2, 2); Field(x3, 3)
+  ELSE
+   Field(x0, 3); Field(x1, 2); Field(x2, 1)
+  END;
+  
+  GenLoad(ldbwu, z, x0); (* z becomes a Register item *)
+  z.typ := OPT.linttyp;  (* ensure 32-bit math for Gen3 *)
+  t1 := z;               (* Initialize t1 so node/typ are valid! *)
+  
+  GenLoad(ldbwu, t1, x1);
+  MakeCon(shift, OPT.linttyp, 8); Gen3(sal, t1, t1, shift);
+  Gen3(or, z, z, t1);
+  IF form # Int THEN (* 32-bit *)
+   GenLoad(ldbwu, t1, x2);
+   MakeCon(shift, OPT.linttyp, 16); Gen3(sal, t1, t1, shift);
+   Gen3(or, z, z, t1);
+   GenLoad(ldbwu, t1, x3);
+   MakeCon(shift, OPT.linttyp, 24); Gen3(sal, t1, t1, shift);
+   Gen3(or, z, z, t1)
+  ELSE (* Sign extend 16-bit to 32-bit *)
+   MakeCon(shift, OPT.linttyp, 16); Gen3(sal, z, z, shift); Gen3(sar, z, z, shift)
+  END;
+  z.typ := typ
+ END UnalignedLoad;
+
+ PROCEDURE UnalignedStore*(VAR dest, val: Item);
+  VAR x0, x1, x2, x3, t1, shift: Item; form: SHORTINT;
+ BEGIN
+  form := val.typ.form;
+  IF dest.mode # RegRel THEN loadAdr(dest); dest.mode := RegRel; dest.offs := 0; dest.inx := none END;
+  load(val); 
+  
+  x0 := dest; x0.typ := OPT.bytetyp;
+  x1 := x0; x2 := x0; x3 := x0;
+  IF OPTR.LittleEndian THEN
+   Field(x1, 1); Field(x2, 2); Field(x3, 3)
+  ELSE
+   Field(x0, 3); Field(x1, 2); Field(x2, 1)
+  END;
+  
+  t1 := val; t1.typ := OPT.bytetyp;
+  GenStore(store, x0, t1);
+  MakeCon(shift, OPT.linttyp, 8); Gen3(shr, t1, val, shift); t1.typ := OPT.bytetyp;
+  GenStore(store, x1, t1);
+  IF form # Int THEN (* 32-bit *)
+   MakeCon(shift, OPT.linttyp, 16); Gen3(shr, t1, val, shift); t1.typ := OPT.bytetyp;
+   GenStore(store, x2, t1);
+   MakeCon(shift, OPT.linttyp, 24); Gen3(shr, t1, val, shift); t1.typ := OPT.bytetyp;
+   GenStore(store, x3, t1)
+  END
+ END UnalignedStore;
+ 
  PROCEDURE SYSgetput* (VAR z, x: Item; getfn: BOOLEAN); (* SYSTEM.GET, SYSTEM.PUT *)
-  VAR form: SHORTINT; constAddr: BOOLEAN;     (* GetPut *)
+  VAR form: SHORTINT; constAddr: BOOLEAN;
  BEGIN
   IF getfn THEN
-   constAddr := x.mode = Con;     (* GetPut *)
+   constAddr := x.mode = Con;
    Mem (x); x.typ := z.typ; form := z.typ.form
   ELSE
-   constAddr := z.mode = Con;     (* GetPut *)
+   constAddr := z.mode = Con;
    Mem (z);
    z.typ := x.typ; form := x.typ.form
   END;
-  IF form IN realSet THEN loadf (x)
-  ELSE load (x)
-  END;
-  OPIR.Instr [pc-1].abs := constAddr & getfn;   (* if x is the address and a constant, no fixup *) (* GetPut *)
-  IF ~getfn THEN Gen0(OPIR.dmb) END;  (* ensures the loaded value is visible before we act on it *)
-  IF z.mode = VarPar THEN
-   loadAdr (z); z.mode := RegRel
-  ELSE CompleteSL (z)
-  END;
-  IF form IN realSet THEN GenStore (fstore, z, x)
-  ELSE GenStore (store, z, x)
-  END;
-  OPIR.Instr [pc-1].abs := constAddr & ~getfn;   (* if z is the address and a constant, no fixup *) (* GetPut *)
-  IF getfn THEN Gen0(OPIR.dmb) END; 
+  
+  IF OPTR.RequireAlignment & ~(form IN realSet) & (form # Byte) & (form # Char) & (form # SInt) THEN
+   IF getfn THEN
+    UnalignedLoad(x, z.typ);
+    IF z.mode = VarPar THEN loadAdr (z); z.mode := RegRel ELSE CompleteSL (z) END;
+    GenStore (store, z, x)
+   ELSE
+    UnalignedStore(z, x)
+   END
+  ELSE
+   IF form IN realSet THEN loadf (x)
+   ELSE load (x)
+   END;
+   OPIR.Instr [pc-1].abs := constAddr & getfn;
+   IF ~getfn THEN Gen0(OPIR.dmb) END; 
+   IF z.mode = VarPar THEN
+    loadAdr (z); z.mode := RegRel
+   ELSE CompleteSL (z)
+   END;
+   IF form IN realSet THEN GenStore (fstore, z, x)
+   ELSE GenStore (store, z, x)
+   END;
+   OPIR.Instr [pc-1].abs := constAddr & ~getfn;
+   IF getfn THEN Gen0(OPIR.dmb) END; 
+  END
  END SYSgetput;
 
  PROCEDURE SYSportio* (VAR z, x: Item; pin: BOOLEAN); (* SYSTEM.PORTIN, SYSTEM.PORTOUT *)(* New Functions *)
