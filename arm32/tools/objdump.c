@@ -2,7 +2,6 @@
  * Oberon Object File Dump Tool
  * Reads an Oberon .Obj file and dumps its contents in text format,
  * including ARM disassembly of the code section.
- * Copyright 2025 Rochus Keller <mailto:me@rochus-keller.ch>
  *
  * Object file format (from OPL.Mod):
  *   OFtag(0xBB) OFversion(0xAF) sfsize(num) symdata refsize(4)
@@ -20,6 +19,8 @@
  *   - Procedure boundary markers in code disassembly using entry table
  *   - Instruction statistics summary
  *   - Large immediates shown in hex alongside decimal
+ *
+ * Copyright 2025 Rochus Keller <mailto:me@rochus-keller.ch>
  *
  * GNU General Public License Usage
  * This file may be used under the terms of the GNU General Public
@@ -59,6 +60,7 @@
 #define EUProcFlag 0x4000
 
 #define MAX_ENTRIES 512
+#define MAX_PROCS  1024
 
 static FILE *f;
 static int verbose = 0;
@@ -66,6 +68,14 @@ static int verbose = 0;
 /* Entry table for procedure boundary markers */
 static int16_t entry_offsets[MAX_ENTRIES];
 static int nof_entries_stored = 0;
+
+/* Procedure name table (populated from Ref section) */
+typedef struct {
+    int32_t offset;          /* code offset (from OutRefPoint) */
+    char    name[256];       /* procedure name */
+} ProcEntry;
+static ProcEntry proc_table[MAX_PROCS];
+static int nof_procs = 0;
 
 /* Instruction statistics */
 static int stat_dp = 0, stat_branch = 0, stat_load = 0, stat_store = 0;
@@ -140,6 +150,206 @@ static int find_entry(int offset) {
         if (entry_offsets[i] == offset) return i;
     }
     return -1;
+}
+
+/* Find procedure name for a code offset; returns NULL if not found */
+static const char *find_proc_name(int offset) {
+    for (int i = 0; i < nof_procs; i++) {
+        if (proc_table[i].offset == offset) return proc_table[i].name;
+    }
+    return NULL;
+}
+
+/* ---- Ref section parser ----
+ *
+ * Parse the Ref section to extract procedure names and code offsets.
+ * Ref data is a sequence of procedure blocks:
+ *
+ * NewRef format (0xF9 marker):
+ *   0xF9  offset(num)  nParams(num)  retType(byte)  level(byte)  slFlag(byte)
+ *   name(string)  { varRef }*
+ *
+ * OldRef format (0xF8 marker):
+ *   0xF8  offset(num)
+ *   name(string)  { varRef }*
+ *
+ * Module body uses: RefTag(0x8C) 0xF8 0 name="$$" { varRef }*
+ *
+ * Variable refs (varRef): byte(1 or 3) [type info] offset(num) name(string)
+ */
+static void parse_ref_data(const uint8_t *ref, int refSize) {
+    int pos = 0;
+    nof_procs = 0;
+
+    /* Helper: read a num from ref buffer */
+    #define REF_NUM(result) do { \
+        int32_t _x = 0; int _shift = 0; int _b; \
+        do { \
+            if (pos >= refSize) goto done; \
+            _b = ref[pos++]; \
+            _x |= (int32_t)(_b & 0x7F) << _shift; \
+            _shift += 7; \
+        } while (_b & 0x80); \
+        if ((_shift < 32) && (_b & 0x40)) _x |= -(1 << _shift); \
+        (result) = _x; \
+    } while(0)
+
+    while (pos < refSize) {
+        int marker = ref[pos];
+        if (marker == 0x8C) {
+            /* RefTag - module body sentinel */
+            pos++;
+            if (pos >= refSize) break;
+            marker = ref[pos];
+        }
+        if (marker == 0xF9) {
+            /* NewRef format */
+            pos++;
+            int32_t offset; REF_NUM(offset);
+            int32_t nParams; REF_NUM(nParams);
+            if (pos >= refSize) break;
+            pos++; /* retType byte */
+            if (pos >= refSize) break;
+            pos++; /* level byte */
+            if (pos >= refSize) break;
+            pos++; /* slFlag byte */
+            /* Read name (zero-terminated string) */
+            char name[256];
+            int ni = 0;
+            while (pos < refSize) {
+                char ch = (char)ref[pos++];
+                if (ni < 255) name[ni++] = ch;
+                if (ch == 0) break;
+            }
+            name[ni] = 0;
+            /* Store in proc table */
+            if (nof_procs < MAX_PROCS && name[0] != 0) {
+                proc_table[nof_procs].offset = offset;
+                strncpy(proc_table[nof_procs].name, name, 255);
+                proc_table[nof_procs].name[255] = 0;
+                nof_procs++;
+            }
+            /* Skip variable refs: each starts with byte 1 or 3 */
+            while (pos < refSize) {
+                int vb = ref[pos];
+                if (vb != 1 && vb != 3) break;
+                pos++; /* mode byte */
+                if (pos >= refSize) break;
+                int tb = ref[pos++]; /* type byte */
+                if (tb & 0x80) {
+                    /* array type: skip element count num */
+                    int32_t dummy; REF_NUM(dummy);
+                } else if (tb >= 0x10) {
+                    /* record/pointer type: skip tdadr num */
+                    int32_t dummy; REF_NUM(dummy);
+                }
+                /* skip offset num */
+                { int32_t dummy; REF_NUM(dummy); }
+                /* skip name string */
+                while (pos < refSize && ref[pos] != 0) pos++;
+                if (pos < refSize) pos++; /* skip null terminator */
+            }
+        } else if (marker == 0xF8) {
+            /* OldRef format */
+            pos++;
+            int32_t offset; REF_NUM(offset);
+            /* Read name */
+            char name[256];
+            int ni = 0;
+            while (pos < refSize) {
+                char ch = (char)ref[pos++];
+                if (ni < 255) name[ni++] = ch;
+                if (ch == 0) break;
+            }
+            name[ni] = 0;
+            if (nof_procs < MAX_PROCS && name[0] != 0) {
+                proc_table[nof_procs].offset = offset;
+                strncpy(proc_table[nof_procs].name, name, 255);
+                proc_table[nof_procs].name[255] = 0;
+                nof_procs++;
+            }
+            /* Skip variable refs */
+            while (pos < refSize) {
+                int vb = ref[pos];
+                if (vb != 1 && vb != 3) break;
+                pos++;
+                if (pos >= refSize) break;
+                int tb = ref[pos++];
+                if (tb & 0x80) {
+                    int32_t dummy; REF_NUM(dummy);
+                }
+                { int32_t dummy; REF_NUM(dummy); }
+                while (pos < refSize && ref[pos] != 0) pos++;
+                if (pos < refSize) pos++;
+            }
+        } else {
+            /* Unknown marker - stop parsing */
+            break;
+        }
+    }
+done:;
+    #undef REF_NUM
+}
+
+/* ---- Export section recursive parser ----
+ *
+ * The Export section format (from OPL.Mod Export/ExportRecord):
+ *
+ *   ExportTag nofExp(int16)
+ *   -- exactly nofExp exported objects, each:
+ *     fp(num) adr(num) [ExportRecord if Typ/Var with Record type]
+ *   -- then items from tree traversal that are EURecord or fp+adr pairs
+ *   EUEnd(byte 0)
+ *
+ * ExportRecord (recursive):
+ *   EURecord(byte 1) link(num)
+ *   IF link < 0 THEN  -- back-reference to already-seen record type; done
+ *   ELSE              -- new record definition:
+ *     nofld(int16)    -- count of items in this record scope
+ *     { item }*       -- items until EUEnd, each is:
+ *                        EURecord -> nested ExportRecord (recursive)
+ *                        num      -> field/method fingerprint
+ *     EUEnd(byte 0)
+ *   END
+ *
+ * The top-level loop reads num values. Value 0 = EUEnd (terminator).
+ * Value 1 = EURecord (start of record type info). Any other value is
+ * a fingerprint (fp) followed by an address (num). After fp+adr, if
+ * the next byte is EURecord, a record type description follows.
+ */
+static void skip_export_record(int depth);
+
+/* Skip an ExportRecord body after EURecord byte has been consumed */
+static void skip_export_record(int depth) {
+    int32_t link = read_num();
+    if (verbose) {
+        for (int i = 0; i < depth; i++) printf("  ");
+        printf("  EURecord link=%d\n", link);
+    }
+    if (link < 0) {
+        /* Back-reference to already-seen record type; no body */
+        return;
+    }
+    /* New record: read nofld(int16), then items until EUEnd.
+     * Items inside a record scope are a mix of:
+     *   - EURecord(1) -> nested ExportRecord
+     *   - num values (field/method fps), possibly followed by EURecord
+     *   - EUEnd(0) -> end of this record scope
+     */
+    int16_t nofld = read_int16();
+    if (verbose) {
+        for (int i = 0; i < depth; i++) printf("  ");
+        printf("  nofld=%d\n", nofld);
+    }
+    /* Read items until EUEnd */
+    for (;;) {
+        int32_t val = read_num();
+        if (val == EUEnd) break;
+        if (val == EURecord) {
+            skip_export_record(depth + 1);
+        }
+        /* else: num value (fp) - just consumed */
+    }
 }
 
 /* ---- ARM Disassembler ---- */
@@ -1149,13 +1359,11 @@ int main(int argc, char **argv) {
     printf("ConstSize:     %d (0x%x)\n", constSize, constSize);
     printf("CodeSize:      %d (0x%x)\n", codeSize, codeSize);
 
-    /* Entries */
+    /* Entries - read and store (printed later with procedure names from Ref) */
     expect_tag(EntryTag);
-    printf("\n--- Entries ---\n");
     nof_entries_stored = 0;
     for (int i = 0; i < nofEntries; i++) {
         int16_t entry = read_int16();
-        printf("  [%d] offset=%d (0x%x)\n", i, entry, (unsigned)entry);
         if (nof_entries_stored < MAX_ENTRIES)
             entry_offsets[nof_entries_stored++] = entry;
     }
@@ -1254,49 +1462,104 @@ int main(int argc, char **argv) {
     {
         int16_t nofExp = read_int16();
         printf("  nofExports=%d\n", nofExp);
-        /* Skip export data - complex nested format */
-        int32_t fp;
-        fp = read_num();
-        while (fp != EUEnd) {
-            if (fp == EURecord) {
-                int32_t link = read_num();
-                if (verbose) printf("  EURecord link=%d\n", link);
-                /* Skip to end of record scope */
-                if (link >= 0) {
-                    int16_t nof = read_int16();
-                    for (int j = 0; j < nof; j++)
-                        read_num();
-                }
+        /* Parse export data using recursive parser.
+         *
+         * Format (from OPL.Mod lines 2603-2639, 2863-2868):
+         *   ExportTag nofExp(int16)
+         *   { fp(num) adr(num) [ExportRecord] }*
+         *   EUEnd(byte 0)
+         *
+         * Each export writes:
+         *   1. fp(num) - fingerprint (never 0, so 0 = EUEnd terminator)
+         *   2. adr(num) - address (CAN be 0 for Typ exports via ObjW(0X))
+         *   3. optionally ExportRecord if type is Record
+         *
+         * We must read fp+adr as PAIRS because adr=0 is valid and must
+         * not be confused with EUEnd. Only fp=0 means EUEnd.
+         */
+        for (;;) {
+            int32_t fp = read_num();
+            if (fp == EUEnd) break;  /* fp is never 0, so 0 = terminator */
+            int32_t adr = read_num(); /* address - can be 0 */
+            if (verbose) printf("  export fp=%d adr=%d\n", fp, adr);
+            /* Check if followed by ExportRecord */
+            int peek = fgetc(f);
+            if (peek == EURecord) {
+                skip_export_record(0);
             } else {
-                /* object export */
-                if (verbose) printf("  export fp=%d\n", fp);
-                read_num(); /* adr or entry offset */
+                ungetc(peek, f);
             }
-            fp = read_num();
         }
     }
 
-    /* Code */
+    /* Code - read into buffer (disassembly printed after Ref parsing) */
     expect_tag(CodeTag);
-    printf("\n--- Code (%d bytes, %d words) ---\n", codeSize, codeSize / 4);
-
-    /* Reset statistics */
-    stat_dp = stat_branch = stat_load = stat_store = 0;
-    stat_ldm_stm = stat_mul = stat_vfp = stat_other = 0;
 
     uint8_t *codeData = NULL;
     if (codeSize > 0) {
         codeData = (uint8_t *)malloc(codeSize);
         for (uint16_t i = 0; i < codeSize; i++)
             codeData[i] = (uint8_t)read_byte();
+    }
 
+    /* Read remaining sections (Use, Types, Ref) into buffer.
+     * The last refSize bytes of the file are the Ref section
+     * (appended by OPM.CloseObj without a tag byte). */
+    long afterCode = ftell(f);
+    fseek(f, 0, SEEK_END);
+    long fileEnd = ftell(f);
+    fseek(f, afterCode, SEEK_SET);
+    long remaining = fileEnd - afterCode;
+
+    uint8_t *restData = NULL;
+    if (remaining > 0) {
+        restData = (uint8_t *)malloc(remaining);
+        fread(restData, 1, remaining, f);
+    }
+
+    /* Parse Ref section for procedure names.
+     * Ref data occupies the last refSize bytes of the file. */
+    if (restData && refSize > 0 && refSize <= remaining) {
+        const uint8_t *refData = restData + (remaining - refSize);
+        parse_ref_data(refData, refSize);
+    }
+
+    /* Print Entries with procedure names */
+    printf("\n--- Entries ---\n");
+    for (int i = 0; i < nof_entries_stored; i++) {
+        const char *pname = find_proc_name(entry_offsets[i]);
+        if (pname)
+            printf("  [%d] offset=%d (0x%x)  %s\n", i, entry_offsets[i],
+                   (unsigned)entry_offsets[i], pname);
+        else
+            printf("  [%d] offset=%d (0x%x)\n", i, entry_offsets[i],
+                   (unsigned)entry_offsets[i]);
+    }
+
+    /* Print Code disassembly with procedure names */
+    printf("\n--- Code (%d bytes, %d words) ---\n", codeSize, codeSize / 4);
+
+    /* Reset statistics */
+    stat_dp = stat_branch = stat_load = stat_store = 0;
+    stat_ldm_stm = stat_mul = stat_vfp = stat_other = 0;
+
+    if (codeSize > 0) {
         /* Check if code looks like ARM (4-byte aligned words) */
         if (codeSize >= 4 && (codeSize % 4 == 0)) {
             for (uint16_t i = 0; i < codeSize; i += 4) {
                 /* Check for procedure boundary */
                 int entry_idx = find_entry(i);
                 if (entry_idx >= 0) {
-                    printf("\n  ; ---- entry[%d] at 0x%04X ----\n", entry_idx, i);
+                    const char *pname = find_proc_name(i);
+                    if (pname)
+                        printf("\n  ; ---- entry[%d] %s (0x%04X) ----\n", entry_idx, pname, i);
+                    else
+                        printf("\n  ; ---- entry[%d] at 0x%04X ----\n", entry_idx, i);
+                } else {
+                    /* Check if this offset has a proc name but no entry (local proc) */
+                    const char *pname = find_proc_name(i);
+                    if (pname)
+                        printf("\n  ; ---- %s (0x%04X) ----\n", pname, i);
                 }
 
                 uint32_t instr = (uint32_t)codeData[i] |
@@ -1332,30 +1595,14 @@ int main(int argc, char **argv) {
         printf("  ;   Total:           %d\n", total);
     }
 
-    /* Skip Use, Types, and Refs sections - just dump remaining bytes */
+    /* Remaining sections summary */
     printf("\n--- Remaining sections (Use/Types/Refs) ---\n");
-    {
-        long pos = ftell(f);
-        fseek(f, 0, SEEK_END);
-        long end = ftell(f);
-        fseek(f, pos, SEEK_SET);
-        long remaining = end - pos;
-        printf("  %ld bytes remaining\n", remaining);
-        if (verbose && remaining > 0) {
-            uint8_t *rest = (uint8_t *)malloc(remaining);
-            fread(rest, 1, remaining, f);
-            for (long i = 0; i < remaining; i += 16) {
-                printf("  %04lX:", i);
-                for (int j = 0; j < 16 && i + j < remaining; j++)
-                    printf(" %02X", rest[i + j]);
-                printf("\n");
-            }
-            free(rest);
-        }
-    }
+    printf("  %ld bytes total, %d bytes Ref (%d procedures)\n",
+           remaining, refSize, nof_procs);
 
     if (constData) free(constData);
     if (codeData) free(codeData);
+    if (restData) free(restData);
     fclose(f);
     return 0;
 }
