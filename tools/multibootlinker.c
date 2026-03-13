@@ -258,14 +258,14 @@ struct InitPointNode {
 typedef struct {
     uint8_t mod;
     uint8_t entry;
-    uint16_t link;
+    uint32_t link;  /* byte offset (ARM32: stored as word count, multiplied back) */
 } LinkEntry;
 
 typedef struct {
     uint8_t mod;
     int16_t entry;
     int16_t nofFixups;
-    uint16_t *offset; /* nofFixups */
+    uint32_t *offset; /* nofFixups, byte offsets (ARM32: stored as word count, multiplied back) */
 } DataLinkEntry;
 
 typedef struct {
@@ -1905,6 +1905,7 @@ static void read_header(FILE *f, Module *m, int16_t *nofDataLinks, int16_t *nofL
     m->dataSize = read_i32_le(f);
     m->conSize = (int32_t)read_i16_le(f);
     m->codeSize = (int32_t)read_u16_le(f);
+    if (arch == &arch_arm32) m->codeSize *= 4;  /* ARM32: stored as word count */
     read_string(f, m->name, sizeof(m->name));
 
     if (Trace) {
@@ -1930,8 +1931,10 @@ static void read_entry(FILE *f, Module *m) {
             halt_msg("out of memory (entries)");
     }
     expect_tag(f, 0x82, m->name);
-    for (int32_t i = 0; i < m->nofEntries; i++)
+    for (int32_t i = 0; i < m->nofEntries; i++) {
         m->entries[i] = (uint32_t)read_u16_le(f);
+        if (arch == &arch_arm32) m->entries[i] *= 4;  /* ARM32: stored as word count */
+    }
 }
 
 static void read_cmd(FILE *f, Module *m) {
@@ -1944,6 +1947,7 @@ static void read_cmd(FILE *f, Module *m) {
     for (int32_t i = 0; i < m->nofCmds; i++) {
         read_string(f, m->cmds[i].name, sizeof(m->cmds[i].name));
         m->cmds[i].adr = (int32_t)read_u16_le(f);
+        if (arch == &arch_arm32) m->cmds[i].adr *= 4;  /* ARM32: stored as word count */
     }
 }
 
@@ -1991,10 +1995,13 @@ static DataLinkEntry *read_data_links(FILE *f, Module *m, int16_t nofDataLinks) 
         dataLinks[i].entry = read_i16_le(f);
         dataLinks[i].nofFixups = read_i16_le(f);
         if (dataLinks[i].nofFixups > 0) {
-            dataLinks[i].offset = (uint16_t *)calloc((size_t)dataLinks[i].nofFixups, sizeof(uint16_t));
+            dataLinks[i].offset = (uint32_t *)calloc((size_t)dataLinks[i].nofFixups, sizeof(uint32_t));
             if (!dataLinks[i].offset)
                 halt_msg("out of memory (dataLinks offsets)");
-            for (int16_t j = 0; j < dataLinks[i].nofFixups; j++) dataLinks[i].offset[j] = read_u16_le(f);
+            for (int16_t j = 0; j < dataLinks[i].nofFixups; j++) {
+                dataLinks[i].offset[j] = read_u16_le(f);
+                if (arch == &arch_arm32) dataLinks[i].offset[j] *= 4;  /* ARM32: stored as word count */
+            }
         }
     }
 
@@ -2011,6 +2018,10 @@ static LinkEntry *read_links(FILE *f, Module *m, int16_t nofLinks) {
         links[i].mod = read_u8(f);
         links[i].entry = read_u8(f);
         links[i].link = read_u16_le(f);
+        /* ARM32: link offsets stored as word count (÷4), except case table (entry 255)
+           which stores constant-pool byte offsets */
+        if (arch == &arch_arm32 && links[i].entry != 255)
+            links[i].link *= 4;
     }
     return links;
 }
@@ -2177,7 +2188,10 @@ static void check_scope(FILE *f, ExportDesc *scope, int level, Module *M, Module
                 if ((and32(link, (int32_t)EUProcFlag) == 0)) {
                     fixup_var_for_use(M, dataLinks, link, mod->sb + scope->dsc[i].adr);
                 } else {
-                    fixup_call_for_use(M, link - (int32_t)EUProcFlag, scope->dsc[i].adr + mod->codeBase);
+                    int32_t codeLink = link - (int32_t)EUProcFlag;
+                    int32_t procAdr = scope->dsc[i].adr;
+                    if (arch == &arch_arm32) { codeLink *= 4; procAdr *= 4; }  /* ARM32: stored as word count */
+                    fixup_call_for_use(M, codeLink, procAdr + mod->codeBase);
                 }
             }
         }

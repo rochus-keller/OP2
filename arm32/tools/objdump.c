@@ -64,9 +64,10 @@
 
 static FILE *f;
 static int verbose = 0;
+static int arm_mode = 0;  /* ARM32: codeSize/entries/cmds stored as word count */
 
 /* Entry table for procedure boundary markers */
-static int16_t entry_offsets[MAX_ENTRIES];
+static int32_t entry_offsets[MAX_ENTRIES];
 static int nof_entries_stored = 0;
 
 /* Procedure name table (populated from Ref section) */
@@ -1295,9 +1296,10 @@ int main(int argc, char **argv) {
     }
 
     int argidx = 1;
-    if (argc > 2 && strcmp(argv[1], "-v") == 0) {
-        verbose = 1;
-        argidx = 2;
+    arm_mode = 1;
+    while (argidx < argc - 1) {
+        if (strcmp(argv[argidx], "-v") == 0) { verbose = 1; argidx++; }
+        else break;
     }
 
     f = fopen(argv[argidx], "rb");
@@ -1341,7 +1343,8 @@ int main(int argc, char **argv) {
     int16_t nofLinks = read_int16();
     int32_t dataSize = read_int32();
     int16_t constSize = read_int16();
-    uint16_t codeSize = read_uint16();
+    uint16_t codeSize_raw = read_uint16();
+    uint32_t codeSize = arm_mode ? (uint32_t)codeSize_raw * 4 : (uint32_t)codeSize_raw;
     char modName[256];
     read_string(modName, sizeof(modName));
 
@@ -1363,7 +1366,8 @@ int main(int argc, char **argv) {
     expect_tag(EntryTag);
     nof_entries_stored = 0;
     for (int i = 0; i < nofEntries; i++) {
-        int16_t entry = read_int16();
+        int16_t raw = read_int16();
+        int32_t entry = arm_mode ? (int32_t)raw * 4 : (int32_t)raw;
         if (nof_entries_stored < MAX_ENTRIES)
             entry_offsets[nof_entries_stored++] = entry;
     }
@@ -1389,7 +1393,8 @@ int main(int argc, char **argv) {
                 name[j] = 0;
             }
         }
-        int16_t entry = read_int16();
+        int16_t raw_entry = read_int16();
+        int32_t entry = arm_mode ? (int32_t)raw_entry * 4 : (int32_t)raw_entry;
         printf("  %s%s  entry=%d (0x%x)\n", has_param ? "$" : "", name, entry, (unsigned)entry);
     }
 
@@ -1419,8 +1424,9 @@ int main(int argc, char **argv) {
         int16_t nofFixups = read_int16();
         printf("  mod=%d entry=%d nofFixups=%d:", mod, entry, nofFixups);
         for (int j = 0; j < nofFixups; j++) {
-            int16_t offset = read_int16();
-            printf(" %d(0x%x)", offset, (unsigned)(uint16_t)offset);
+            int16_t raw_offset = read_int16();
+            int32_t offset = arm_mode ? (int32_t)raw_offset * 4 : (int32_t)raw_offset;
+            printf(" %d(0x%x)", offset, (unsigned)offset);
         }
         printf("\n");
     }
@@ -1431,8 +1437,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < nofLinks; i++) {
         int mod = read_byte();
         int entry = read_byte();
-        int16_t offset = read_int16();
-        printf("  mod=%d entry=%d offset=%d (0x%x)\n", mod, entry, offset, (unsigned)(uint16_t)offset);
+        int16_t raw_offset = read_int16();
+        int32_t offset = (arm_mode && entry != 255) ? (int32_t)raw_offset * 4 : (int32_t)raw_offset;
+        printf("  mod=%d entry=%d offset=%d (0x%x)\n", mod, entry, offset, (unsigned)offset);
     }
 
     /* Data (constants) */
@@ -1498,7 +1505,7 @@ int main(int argc, char **argv) {
     uint8_t *codeData = NULL;
     if (codeSize > 0) {
         codeData = (uint8_t *)malloc(codeSize);
-        for (uint16_t i = 0; i < codeSize; i++)
+        for (uint32_t i = 0; i < codeSize; i++)
             codeData[i] = (uint8_t)read_byte();
     }
 
@@ -1546,7 +1553,7 @@ int main(int argc, char **argv) {
     if (codeSize > 0) {
         /* Check if code looks like ARM (4-byte aligned words) */
         if (codeSize >= 4 && (codeSize % 4 == 0)) {
-            for (uint16_t i = 0; i < codeSize; i += 4) {
+            for (uint32_t i = 0; i < codeSize; i += 4) {
                 /* Check for procedure boundary */
                 int entry_idx = find_entry(i);
                 if (entry_idx >= 0) {
@@ -1572,12 +1579,12 @@ int main(int argc, char **argv) {
             }
         } else {
             /* Hex dump for non-ARM code */
-            for (uint16_t i = 0; i < codeSize; i += 16) {
-                printf("  %04X:", i);
-                for (int j = 0; j < 16 && i + j < codeSize; j++)
-                    printf(" %02X", codeData[i + j]);
-                printf("\n");
-            }
+                for (uint32_t i = 0; i < codeSize; i += 16) {
+                    printf("  %04X:", i);
+                    for (int j = 0; j < 16 && (uint32_t)(i + j) < codeSize; j++)
+                        printf(" %02X", codeData[i + j]);
+                    printf("\n");
+                }
         }
 
         /* Instruction statistics */

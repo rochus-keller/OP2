@@ -746,7 +746,7 @@ MODULE OPL; (** non-portable *)
    WHILE varConsTab[index].next # noEntry DO index := varConsTab[index].next END;
    varConsTab[index].next := nofVarConsLinks
   END;
-  varConsTab[nofVarConsLinks].offset := SHORT(offset);
+  varConsTab[nofVarConsLinks].offset := SHORT(offset DIV 4);
   varConsTab[nofVarConsLinks].next := noEntry;
   INC(nofVarConsLinks)
  END VarConsLink;
@@ -2290,9 +2290,7 @@ MODULE OPL; (** non-portable *)
    IF proc.mode IN {TProc, Typ} THEN entryNr := proc.adr MOD 10000H
    ELSE entryNr := proc.adr
    END;
-   IF OPO.pc > 32767 THEN entry[entryNr] := SHORT(OPO.pc - 65536)
-   ELSE entry[entryNr] := SHORT(OPO.pc)
-   END
+   entry[entryNr] := SHORT(OPO.pc DIV 4)
   END
  END FixupLocalProcCall;
 
@@ -2737,7 +2735,7 @@ MODULE OPL; (** non-portable *)
      OPT.FPrintObj(obj);
      OPM.ObjWNum(obj.fp); OPM.ObjWString(obj.name);
      IF obj.mode = Var THEN OPM.ObjWNum(obj.adr DIV 10000H)
-     ELSIF obj.mode = XProc THEN OPM.ObjWNum(LSW(link[obj.adr DIV 10000H].offset) + EUProcFlag)
+     ELSIF obj.mode = XProc THEN OPM.ObjWNum(link[obj.adr DIV 10000H].offset DIV 4 + EUProcFlag)
      ELSE OPM.ObjW(0X)
      END;
      IF (obj.mode = Typ) OR (obj.mode = Var) THEN
@@ -2867,12 +2865,18 @@ MODULE OPL; (** non-portable *)
   END;
   i := 0;
   (* header block *)
+  (* NOTE: the uint16 code size is no longer measured in bytes, but in words, because
+     in ARMv7 each instruction is a 32 bit value which causes programs to be ~ 1.5 times
+     the size of i386, so some of the large Oberon system files (Objects, etc.) exceed
+     the uint16 size. We avoid this limitation by counting instructions instead of bytes.
+     multibootlinker.c, objdump.c and Modules.Mod have been updated accordingly.
+     2026-03-13 me@rochus-keller.ch *)
   OPM.ObjWInt(nofEntries); OPM.ObjWInt(nofcmds);
   IF nofptrs > MAX(INTEGER) THEN OPM.err(222) END;
   OPM.ObjWInt(SHORT(nofptrs)); OPM.ObjWInt(nofrecs);
   OPM.ObjWInt(nofImp);
   OPM.ObjWInt(nofVarCons); OPM.ObjWInt(nofLinks - linkCorrection);
-  OPM.ObjWBytes(OPO.dsize, 4); OPM.ObjWInt(SHORT(OPO.csize)); OPM.ObjWInt(SHORT(OPO.pc));
+  OPM.ObjWBytes(OPO.dsize, 4); OPM.ObjWInt(SHORT(OPO.csize)); OPM.ObjWInt(SHORT(OPO.pc DIV 4));
   WriteName(modName);
   (* entry block *)
   OPM.ObjW(EntryTag);
@@ -2914,7 +2918,9 @@ MODULE OPL; (** non-portable *)
   WHILE i < nofLinks DO
    IF (link[i].offset # Nil) & (link[i].mod <= 0) THEN
     OPM.ObjW(CHR(modMap[link[i].mod])); OPM.ObjW(CHR(link[i].entry));
-    OPM.ObjWInt(link[i].offset)
+    IF link[i].entry = CaseTableEntryNr THEN OPM.ObjWInt(SHORT(link[i].offset))
+    ELSE OPM.ObjWInt(SHORT(link[i].offset DIV 4))
+    END
    END;
    INC(i)
   END;
