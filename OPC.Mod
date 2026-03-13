@@ -608,9 +608,9 @@ Intel i386 :
    GenLoad (fload, x, x)
   END
  END loadf;
- 
+  
  PROCEDURE load (VAR x: Item);
- VAR y: Item;
+ VAR y: Item; op: INTEGER;
  BEGIN
   IF x.mode # Reg THEN
    IF x.mode = VarPar THEN
@@ -623,7 +623,14 @@ Intel i386 :
     GenLoad(ld, y, y);
     x.descReg := y.adr
    ELSE
-    GenLoad (ld, x, x)
+    op := ld;
+    IF OPTR.RequireAlignment & (x.mode # Con) THEN
+     IF x.typ.form = SInt THEN op := ldbdw
+     ELSIF x.typ.form = Int THEN op := ldwdw
+     ELSIF (x.typ.form = Char) OR (x.typ.form = Byte) OR (x.typ.form = Bool) THEN op := ldbwu
+     END
+    END;
+    GenLoad (op, x, x)
    END
   END
  END load;

@@ -44,7 +44,7 @@ MODULE OPO;
   Imme*  = ImmReg;
 
  (* code and data length per module *)
-  CodeLength*  = 65000;
+  CodeLength*  = 130000;
   MaxConstLength* = 64*1024;
 
   (* ARM32 GPR numbers *)

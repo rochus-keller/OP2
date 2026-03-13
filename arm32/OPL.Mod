@@ -405,20 +405,55 @@ MODULE OPL; (** non-portable *)
   END
  END loaded;
 
- PROCEDURE GetReg(VAR reg: SHORTINT);
+      PROCEDURE GetReg(VAR reg: SHORTINT);
  (* Returns any free allocatable GPR (R0-R10) and marks it occupied *)
  (* Allocation order: R0-R3 (scratch) first, then R4-R10 (callee-saved) *)
-  VAR r: SHORTINT;
- BEGIN
-  (* Try R0..R10 in order *)
-  r := R0;
-  WHILE (r <= R10) & (regTab[r] # free) DO INC(r) END;
-  IF r > R10 THEN
-   OPM.err(215); RegErr := TRUE; reg := R0; RETURN
-  END;
-  regTab[r] := Occupied;
-  reg := r
- END GetReg;
+ (* If all registers are full, evict a re-computable instruction *)
+      VAR r: SHORTINT; pReg, bestPReg: LONGINT; bestR, op: SHORTINT;
+
+   PROCEDURE Evictable(op: SHORTINT): BOOLEAN;
+   (* Returns TRUE if the instruction category can be re-computed by Load() *)
+   BEGIN
+    RETURN ((op >= Ld) & (op <= Ldbwu)) (* Load instructions: op/32 = 1..7 *)
+        OR (op = Lea)                    (* LEA: address computation *)
+        OR (op = Add) OR (op = Sub)      (* Binary arithmetic *)
+        OR (op = Neg) OR (op = Not)      (* Unary arithmetic *)
+   END Evictable;
+
+    BEGIN
+     (* Try R0..R10 in order *)
+     r := R0;
+     WHILE (r <= R10) & (regTab[r] # free) DO INC(r) END;
+     IF r > R10 THEN
+      (* All registers occupied: try to evict a re-computable instruction.
+         Load, Lea, Add, Sub, Neg, Not can all be re-executed by Load(). *)
+      bestR := none; bestPReg := -1;
+      r := R10;
+      WHILE r >= R0 DO
+       pReg := regTab[r];
+       IF (pReg > none) & (pReg # Occupied) THEN
+        op := SHORT(OPIR.Instr[pReg].op DIV 32);
+        IF Evictable(op) THEN
+         (* Prefer evicting the oldest (lowest pReg number) to minimize re-use distance *)
+         IF (bestR = none) OR (pReg < bestPReg) THEN
+          bestR := r; bestPReg := pReg
+         END
+        END
+       END;
+       DEC(r)
+      END;
+      IF bestR # none THEN
+       (* Evict: mark the pReg as not loaded so FindLoadReg will reload it *)
+       OPIR.Instr[bestPReg].reg := (-2) - bestR;
+       regTab[bestR] := free;
+       r := bestR
+      ELSE
+       OPM.err(215); RegErr := TRUE; reg := R0; RETURN
+      END
+     END;
+     regTab[r] := Occupied;
+     reg := r
+    END GetReg;
 
  PROCEDURE GetThisReg(this: SHORTINT);
  (* Marks 'this' GPR as occupied. If occupied, moves its value to another register *)
@@ -570,12 +605,14 @@ MODULE OPL; (** non-portable *)
   END
  END DecCheckReg;
 
- PROCEDURE FindReg(pReg: LONGINT; VAR reg: SHORTINT);
+  PROCEDURE FindReg(pReg: LONGINT; VAR reg: SHORTINT);
  BEGIN
-  ASSERT(loaded(pReg));
-  IF pReg > none THEN reg := OPIR.Instr[pReg].reg
+  IF pReg > none THEN
+   IF ~loaded(pReg) THEN Load(OPIR.Instr[pReg]) END;
+   reg := OPIR.Instr[pReg].reg
   ELSIF pReg = RiscSP THEN reg := SP
-  ELSE reg := FP
+  ELSIF pReg = RiscFP THEN reg := FP
+  ELSE reg := none
   END
  END FindReg;
 
@@ -872,7 +909,7 @@ MODULE OPL; (** non-portable *)
     disp: LONGINT;
     op: LONGINT;
  BEGIN
-  op := instr.op DIV 32;
+   op := instr.op DIV 32;
   IF (op = Neg) OR (op = Not) THEN
    IF loaded(instr.src1) THEN base := OPIR.Instr[instr.src1].reg
    ELSE FindLoadReg(instr.src1, base) END;
@@ -882,6 +919,31 @@ MODULE OPL; (** non-portable *)
     OPO.GenDataProcImm(CondAL, OPO.dpRSB, 0, instr.reg, base, 0)
    ELSE
     OPO.GenDataProcReg(CondAL, OPO.dpMVN, 0, instr.reg, 0, base, ShiftLSL, 0)
+   END;
+   IF (instr.reg = base) & IsAllocatable(base) THEN
+    IF regTab[base] > none THEN OPIR.Instr[regTab[base]].reg := -2 - base END
+   END;
+   IF (instr.reg > none) & IsAllocatable(instr.reg) THEN
+    regTab[instr.reg] := instr.dest
+   END;
+   RETURN
+  ELSIF (op = Add) OR (op = Sub) THEN
+   (* Re-compute a displaced binary arithmetic instruction.
+      This can happen when register pressure causes a previously computed
+      Add/Sub result to lose its register via FreeReg/ReleaseReg. *)
+   mode := SHORT((instr.op DIV 8) MOD 4);
+   FindLoadReg(instr.src1, base);
+   dummy := none;
+   IF mode = ImmReg THEN
+    inx := none;
+    AssignReg(instr.dest, base, dummy, dummy);
+    IF op = Add THEN EmitAddImm(CondAL, instr.reg, base, instr.src2)
+    ELSE EmitSubImm(CondAL, instr.reg, base, instr.src2) END
+   ELSE
+    FindLoadReg(instr.src2, inx);
+    AssignReg(instr.dest, base, inx, dummy);
+    IF op = Add THEN OPO.GenADD(CondAL, instr.reg, base, inx)
+    ELSE OPO.GenSUB(CondAL, instr.reg, base, inx) END
    END;
    IF (instr.reg = base) & IsAllocatable(base) THEN
     IF regTab[base] > none THEN OPIR.Instr[regTab[base]].reg := -2 - base END
@@ -1481,7 +1543,7 @@ MODULE OPL; (** non-portable *)
    ELSE OPO.GenTSTReg(CondAL, reg, base) END
   ELSE (* Bt: bit test - test bit position *)
    (* Shift bit to MSB and compare natively via scratch register IP.
-      This prevents tmp register clobbering and guarantees correct Carry (CS/CC) flags *)
+      This prevents tmp register clobbering and guarantees correct Carry (CS/CC) flags! *)
    IF mode = ImmReg THEN
     OPO.GenShiftImm(CondAL, IP, reg, ShiftLSL, SHORT(31 - (instr.src2 MOD 32)));
     OPO.PutWord(0E35C0102H) (* CMP IP, #0x80000000 *)
@@ -1544,8 +1606,8 @@ MODULE OPL; (** non-portable *)
      On i386 the front-end does SUB ESP,size then REP MOVSD to [EDI] leaving ESP
      unchanged.  On ARM the copy loop used post-increment on SP, moving SP past
      the data.  The callee cleanup (ADD SP,paramSize) then over-corrects SP.
-     So when dest=SP and forward, copy in REVERSE order using pre-decrement
-     stores (STR IP,[SP,#-step]).  This also decrements SP by totalBytes
+     Fix: when dest=SP and forward, copy in REVERSE order using pre-decrement
+     stores (STR IP,[SP,#-step]!).  This naturally decrements SP by totalBytes
      (allocating stack space) and leaves the data in the correct order for the
      callee to read at [FP+8].  The callee ADD SP,paramSize then correctly
      restores SP.  We first adjust src to point to the END of the source. *)
@@ -1620,20 +1682,20 @@ MODULE OPL; (** non-portable *)
   DecReg(srcAdr); DecReg(src2Adr)
  END GenCmpString;
 
- PROCEDURE GenShort(VAR instr: Instruction);
+  PROCEDURE GenShort(VAR instr: Instruction);
  (* short: truncate to shorter type with correct sign-extension *)
-  VAR src: SHORTINT; size: LONGINT;
+  VAR src, dummy: SHORTINT; size: LONGINT;
  BEGIN
-  FindReg(instr.src1, src);
+  FindLoadReg(instr.src1, src);
   size := (instr.op MOD 8) * 8;
-  ASSERT(LastUse(src));
+  dummy := none;
+  AssignReg(instr.dest, src, dummy, dummy);
   IF size = Bit16 THEN
-   (* Sign-extend 16-bit so negative font offsets stay negative *)
-   OPO.GenSXTH(CondAL, src, src);
+   OPO.GenSXTH(CondAL, instr.reg, src)
   ELSE (* Bit8 *)
-   OPO.GenSXTB(CondAL, src, src);
+   OPO.GenSXTB(CondAL, instr.reg, src)
   END;
-  AssignThisReg(instr.dest, src)
+  DecCheckReg(instr.dest, src, dummy, dummy)
  END GenShort;
 
   PROCEDURE GenPhi(VAR instr: Instruction);
@@ -1738,7 +1800,7 @@ MODULE OPL; (** non-portable *)
   
   AdjustLargeOffset(base, disp, 1024);
   memBase := base;
-  (* dito index scale *)
+  (* Added missing index scale computation for floats *)
   IF inx > none THEN
    IF instr.scale > 0 THEN
     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
@@ -1771,7 +1833,7 @@ MODULE OPL; (** non-portable *)
    OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
    IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
    OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
-   (* dito missing index scale *)
+   (* Added missing index scale computation for floats *)
    IF inx > none THEN
     IF instr.scale > 0 THEN
      OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
@@ -1796,7 +1858,7 @@ MODULE OPL; (** non-portable *)
   
   AdjustLargeOffset(base, disp, 1024);
   memBase := base;
-  (* dito index scale *)
+  (* Added missing index scale computation for floats *)
   IF inx > none THEN
    IF instr.scale > 0 THEN
     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
