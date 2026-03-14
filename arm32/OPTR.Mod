@@ -33,8 +33,6 @@ MODULE OPTR; (** non-portable *)
   EnterConstProc* = PROCEDURE(name: ARRAY OF CHAR; value: LONGINT);
 
  VAR
-  RequireAlignment*: BOOLEAN; 
-  LittleEndian*: BOOLEAN; 
   Target* : ARRAY 8 OF CHAR;
   MinRegNr*: LONGINT;
   MaxRegNr*: LONGINT;
@@ -75,8 +73,6 @@ MODULE OPTR; (** non-portable *)
  END EnterRegisters;
 
 BEGIN
- RequireAlignment := TRUE; (* ARM requires aligned memory access *)
- LittleEndian := TRUE;
  Target := "ARMv7";
  MinRegNr := 0;
  MaxRegNr := 14

@@ -166,9 +166,6 @@ Statements
  
  PROCEDURE AllocVar(VAR adr, this: LONGINT; elemsize: LONGINT);
  BEGIN
-  IF OPTR.RequireAlignment & (elemsize < 4) THEN
-   elemsize := 4 (* round up to word size so sub-word variables are word-aligned on stack *)
-  END;
   IncAdr(adr, -elemsize); this := adr
  END AllocVar;
  

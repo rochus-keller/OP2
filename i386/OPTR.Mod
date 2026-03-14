@@ -14,8 +14,6 @@ MODULE OPTR; (** non-portable *)
   EnterConstProc* = PROCEDURE(name: ARRAY OF CHAR; value: LONGINT);
 
  VAR
-  RequireAlignment*: BOOLEAN; 
-  LittleEndian*: BOOLEAN; 
   Target* : ARRAY 8 OF CHAR;
   MinRegNr*: LONGINT;
   MaxRegNr*: LONGINT;
@@ -64,8 +62,6 @@ MODULE OPTR; (** non-portable *)
  END EnterRegisters;
 
 BEGIN
- RequireAlignment := FALSE; 
- LittleEndian := TRUE;
  Target := "i386";
  MinRegNr := 0;
  MaxRegNr := 31
