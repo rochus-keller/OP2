@@ -795,25 +795,18 @@ MODULE OPL; (** non-portable *)
 
  PROCEDURE AddLink(index, offset: LONGINT);
  (* BL instruction is at 'offset'; store fixup chain in the BL's imm24 field *)
- (* The chain is encoded as: imm24 = (nextoffset >> 2) & 0xFFFFFF *)
-  VAR old, oldImm24: LONGINT;
+ (* The chain stores the previous offset as a word offset (byte offset DIV 4) *)
+  VAR old: LONGINT;
  BEGIN
   IF ~LinkErr THEN
    OPO.GetWord(offset, old);
-   (* Extract current imm24 from BL instruction *)
-   oldImm24 := old MOD 1000000H;
    IF link[index].offset = Nil THEN
-    (* First entry: encode -1 as sentinel (0xFFFFFF = -1 in 24-bit) *)
+    (* First entry: encode -1 as sentinel (0xFFFFFF) *)
     OPO.PutWordAt(offset, (old DIV 1000000H) * 1000000H + 0FFFFFFH)
    ELSE
-    (* Chain: encode previous offset >> 2 *)
-    IF link[index].offset >= 8000H THEN
-     OPO.PutWordAt(offset, (old DIV 1000000H) * 1000000H +
-      ((link[index].offset - 10000H) * 4 + 0) MOD 1000000H)
-    ELSE
-     OPO.PutWordAt(offset, (old DIV 1000000H) * 1000000H +
-      (link[index].offset MOD 1000000H))
-    END
+    (* Chain: encode previous offset as word offset *)
+    OPO.PutWordAt(offset, (old DIV 1000000H) * 1000000H +
+     (link[index].offset DIV 4 MOD 1000000H))
    END;
    link[index].offset := offset
   END

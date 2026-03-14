@@ -932,14 +932,9 @@ static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t li
         if (imm24 == 0xFFFFFF) {
             /* Sentinel: end of chain */
             nextlink = -1;
-        } else if (imm24 >= 0x800000) {
-            /* Large offset: decode ((offset - 0x10000) * 4) MOD 0x1000000 */
-            /* Reverse: offset = (imm24 as signed 24-bit) / 4 + 0x10000 */
-            int32_t signed24 = imm24 - 0x1000000; /* sign-extend 24->32 bit */
-            nextlink = signed24 / 4 + 0x10000;
         } else {
-            /* Small offset: chain value is the byte offset directly */
-            nextlink = imm24;
+            /* Chain value is a word offset; convert to byte offset */
+            nextlink = imm24 * 4;
         }
 
         uint32_t optype = ((uint32_t)instr >> 24) & 0xFF;
@@ -1604,11 +1599,9 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                         int32_t nextlink;
                         if (imm24 == 0xFFFFFF) {
                             nextlink = -1;  /* sentinel: end of chain */
-                        } else if (imm24 >= 0x800000) {
-                            int32_t signed24 = (int32_t)imm24 - 0x1000000;
-                            nextlink = signed24 / 4 + 0x10000;
                         } else {
-                            nextlink = (int32_t)imm24;
+                            /* Chain value is a word offset; convert to byte offset */
+                            nextlink = (int32_t)(imm24 * 4);
                         }
 
                         /* Read entry index from MOVT imm16:
