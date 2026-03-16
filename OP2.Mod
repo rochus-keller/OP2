@@ -11,9 +11,12 @@ MODULE OP2;
    
  PROCEDURE SignOn;
  BEGIN
-  Out.String("Oberon Portable Compiler / nw, rc, nm, tk, prk / "); 
-  Out.String(OPTR.Target); Out.String(" target"); Out.Ln; 
-  Out.String("C99 version and ARMv7 backend by me@rochus-keller.ch"); Out.Ln;
+  Out.String("Oberon Portable Compiler / nw, rc, nm, tk, prk "); Out.Ln;
+  IF OPTR.Target = OPM.i386 THEN
+    Out.String("Target: i386 (C99 version by me@rochus-keller.ch)"); Out.Ln;
+  ELSE
+    Out.String("Target: arm32 (backend and C99 version by me@rochus-keller.ch)"); Out.Ln; 
+  END
  END SignOn;
  
  PROCEDURE ParseOptions(VAR name, options, path, pref, extension: ARRAY OF CHAR;  VAR codeOpt, parserOpt: SET);

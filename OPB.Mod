@@ -8,7 +8,7 @@ Refer to the license.txt file provided with this distribution. *)
 (*
  References:
  1. N. Wirth Oberon Language Report
- 2. Wirth/MÃ¶ssenbÃ¶ck, Oberon-2 Langauge Report
+ 2. Wirth/Mössenböck, Oberon-2 Langauge Report
 *)
 
 MODULE OPB; (** non-portable *)
@@ -1550,7 +1550,7 @@ MODULE OPB; (** non-portable *)
   | getrfn, putrfn: (*SYSTEM.GETREG, SYSTEM.PUTREG*)
     IF p.conval # NIL THEN i := p.conval.intval;  p.conval.intval := OPTR.RegIndex(i)  END;
     IF (x^.class = Ntype) OR (x^.class = Nproc) THEN err(126)
-    ELSIF ~OPTR.ValidRegType(i, f) THEN err(111)
+    ELSIF ~OPTR.ValidRegType(i, SHORT(f)) THEN err(111)
     ELSE
      IF fctno = getrfn THEN
       IF NotVar(x) THEN err(112) END ;

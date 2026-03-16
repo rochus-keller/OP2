@@ -1695,7 +1695,7 @@ MODULE OPL; (** non-portable *)
   VAR src1, src2: SHORTINT;
  BEGIN
   ASSERT((OPIR.Instr[instr.src2].reg >= 0) & (OPIR.Instr[instr.src1].reg # none));
-  IF OPIR.Instr[instr.src1].reg < 0 THEN src1 := SHORT(-2 - OPIR.Instr[instr.src1].reg)
+  IF OPIR.Instr[instr.src1].reg < 0 THEN src1 := (-2 - OPIR.Instr[instr.src1].reg)
   ELSE
    src1 := OPIR.Instr[instr.src1].reg;
    FreeReg(src1)
@@ -2076,7 +2076,7 @@ MODULE OPL; (** non-portable *)
    regSet := {};
    i := 0;
    WHILE i < MaxGPRs DO
-    savedRegs[nofSavedLevel].reg[i] := regTab[i];
+    savedRegs[nofSavedLevel].reg[i] := SHORT(regTab[i]);
     IF (regTab[i] # free) & (regTab[i] # Occupied) THEN
      IF (regTab[i] >= 0) & (OPIR.Instr[regTab[i]].op DIV 32 >= 1) & (OPIR.Instr[regTab[i]].op DIV 32 <= 7) THEN
       (* indirect memory load; don't save/restore, mark spilled for reload *)
@@ -2093,7 +2093,7 @@ MODULE OPL; (** non-portable *)
    (* Save VFP registers: save bookkeeping AND emit VPUSH for each in-use D-register *)
    i := 0;
    WHILE i < MaxFRegs DO
-    savedRegs[nofSavedLevel].freg[i] := fregTab[i];
+    savedRegs[nofSavedLevel].freg[i] := SHORT(fregTab[i]);
     IF fregTab[i] # free THEN
      OPO.GenVPUSHD(CondAL, i, 1);  (* VPUSH {Di} *)
      fregTab[i] := free
