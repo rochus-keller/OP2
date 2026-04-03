@@ -120,6 +120,7 @@ static bool Trace = true;
 static bool TraceMore = false;
 static bool hypToSvc = false;     /* --hyp-to-svc: emit HYP->SVC mode switch (RPi) */
 static bool coreParking = false;  /* --core-parking: park secondary cores in WFE loop (RPi) */
+static bool debugLoop = false;    /* --debug-loop: emit register-based infinite loop at start */
 
 /* ------------------------------------------------------------ */
 /* Basic types */
@@ -343,6 +344,12 @@ struct ArchOps {
     /* Patch a Multiboot header at the beginning of the output file.
      * Returns false if Multiboot is not supported on this architecture. */
     bool (*PatchMultibootHeader)(FILE *out, int32_t base, int32_t entry, int32_t size);
+    
+    /* Size of the debug loop sequence in bytes */
+    int32_t debug_loop_size;
+
+    /* Emit a register-based infinite loop for GDB attachment. */
+    int32_t (*EmitDebugLoop)(FILE *out);
 };
 
 /* ArchOps instances are defined after the arch-specific implementations below. */
@@ -908,6 +915,13 @@ static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
     return true;
 }
 
+static int32_t i386_EmitDebugLoop(FILE *out) {
+    /* MOV EAX, 1; TEST EAX, EAX; JNZ -4 */
+    uint8_t loop_code[9] = {0xB8, 0x01, 0x00, 0x00, 0x00, 0x85, 0xC0, 0x75, 0xFC};
+    write_bytes(out, loop_code, 9);
+    return 9;
+}
+
 /* ---- ARMv6/v7 ---- */
 
 static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
@@ -989,34 +1003,21 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
      * On RPi 2/3, the GPU bootloader (and QEMU 10.x) starts ARM cores
      * in HYP mode (EL2).  Some code (e.g. OP2 ARRAY OF CHAR comparisons)
      * behaves differently in HYP mode.  This sequence drops to SVC mode.
-     *
-     * MRS  r0, CPSR              @ Read current mode     = 0xE10F0000
-     * AND  r0, r0, #0x1F         @ Extract mode bits     = 0xE200001F
-     * CMP  r0, #0x1A             @ 0x1A = HYP mode       = 0xE350001A
-     * BNE  not_hyp               @ Skip if not HYP       = 0x1A000003
-     * MRS  r0, CPSR              @ Read CPSR again       = 0xE10F0000
-     * BIC  r0, r0, #0x1F         @ Clear mode bits       = 0xE3C0001F
-     * ORR  r0, r0, #0x13         @ Set SVC mode (0x13)   = 0xE3800013
-     * MSR  SPSR_hyp, r0          @ Set target mode       = 0xE169F000
-     * MSR  ELR_hyp, lr           @ Set return address    = 0xE12EF30E
-     *                            @ (next instruction after ERET)
-     * ERET                       @ Exception return      = 0xE160006E
-     * not_hyp:
      */
     if (hypToSvc) {
         write_i32_le(out, (int32_t)0xE10F0000u);  /* MRS r0, CPSR */
         write_i32_le(out, (int32_t)0xE200001Fu);  /* AND r0, r0, #0x1F */
         write_i32_le(out, (int32_t)0xE350001Au);  /* CMP r0, #0x1A */
-        write_i32_le(out, (int32_t)0x1A000005u);  /* BNE not_hyp (+6 instr, skip to after ERET) */
+        write_i32_le(out, (int32_t)0x1A000006u);  /* BNE not_hyp (+6 instr, skip to after ERET) */
         write_i32_le(out, (int32_t)0xE10F0000u);  /* MRS r0, CPSR */
         write_i32_le(out, (int32_t)0xE3C0001Fu);  /* BIC r0, r0, #0x1F */
         write_i32_le(out, (int32_t)0xE3800013u);  /* ORR r0, r0, #0x13 */
-        write_i32_le(out, (int32_t)0xE169F000u);  /* MSR SPSR_hyp, r0 */
-        /* ADR lr, not_hyp: compute lr = pc + 4 (skip ERET) */
-        write_i32_le(out, (int32_t)0xE28FE004u);  /* ADD lr, pc, #4 */
+        write_i32_le(out, (int32_t)0xE16FF000u);  /* MSR SPSR_cxsf, r0 */
+        write_i32_le(out, (int32_t)0xE28F0004u);  /* ADD r0, pc, #4 */
+        write_i32_le(out, (int32_t)0xE12EF300u);  /* MSR ELR_hyp, r0 */
         write_i32_le(out, (int32_t)0xE160006Eu);  /* ERET */
         /* not_hyp: */
-        emitted += 40;
+        emitted += 44;
     }
 
     /* Optional core parking (--core-parking).
@@ -1301,6 +1302,18 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
     }
 }
 
+static int32_t arm_EmitDebugLoop(FILE *out) {
+    /* MOV r3, #1     = 0xE3A03001
+     * loop:
+     * CMP r3, #0     = 0xE3530000
+     * BNE loop       = 0x1AFFFFFD (branch -12 bytes relative to PC)
+     */
+    write_i32_le(out, (int32_t)0xE3A03001u);
+    write_i32_le(out, (int32_t)0xE3530000u);
+    write_i32_le(out, (int32_t)0x1AFFFFFDu);
+    return 12;
+}
+
 /* ---- RV32 (RISC-V 32-bit) ---- */
 
 /* Encode a RISC-V J-type immediate (for JAL).
@@ -1453,6 +1466,16 @@ static bool rv32_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, in
     return false; /* Multiboot is not supported on RISC-V */
 }
 
+static int32_t rv32_EmitDebugLoop(FILE *out) {
+    /* ADDI x5, x0, 1  = 0x00100293
+     * loop:
+     * BNE x5, x0, 0   = 0x00029063 (branch to self)
+     */
+    write_i32_le(out, (int32_t)0x00100293u);
+    write_i32_le(out, (int32_t)0x00029063u);
+    return 8;
+}
+
 /* ---- ArchOps table instances ---- */
 
 static const ArchOps arch_i386 = {
@@ -1465,6 +1488,8 @@ static const ArchOps arch_i386 = {
     .EmitStackPreamble  = i386_EmitStackPreamble,
     .PatchImageHeader   = i386_PatchImageHeader,
     .PatchMultibootHeader = i386_PatchMultibootHeader,
+    .debug_loop_size    = 9,
+    .EmitDebugLoop      = i386_EmitDebugLoop,
 };
 
 static const ArchOps arch_arm32 = {
@@ -1477,6 +1502,8 @@ static const ArchOps arch_arm32 = {
     .EmitStackPreamble  = arm_EmitStackPreamble,
     .PatchImageHeader   = arm_PatchImageHeader,
     .PatchMultibootHeader = arm_PatchMultibootHeader,
+    .debug_loop_size    = 12,
+    .EmitDebugLoop      = arm_EmitDebugLoop,
 };
 
 static const ArchOps arch_rv32 = {
@@ -1489,6 +1516,8 @@ static const ArchOps arch_rv32 = {
     .EmitStackPreamble  = rv32_EmitStackPreamble,
     .PatchImageHeader   = rv32_PatchImageHeader,
     .PatchMultibootHeader = rv32_PatchMultibootHeader,
+    .debug_loop_size    = 8,
+    .EmitDebugLoop      = rv32_EmitDebugLoop,
 };
 
 /* ------------------------------------------------------------ */
@@ -2247,13 +2276,22 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
      * ARM32: core-parking (20) + VFP init (24) + MOVW+MOVT SP (8) + optional PUSH {R2} (4) = 52 or 56
      * RV32:  LUI+ADDI SP (8) + optional ADDI+SW (8) = 8 or 16 */
     int32_t preamble_size = 0;
+    
+    if (debugLoop) {
+        preamble_size += arch->debug_loop_size;
+    }
+    
     if (stack_size > 0) {
-        if (arch == &arch_i386)
+        if (arch == &arch_i386) {
             preamble_size = multiboot ? 6 : 5;
-        else if (arch == &arch_arm32)
-            preamble_size = multiboot ? 56 : 52;
-        else
+        } else if (arch == &arch_arm32) {
+            preamble_size = 32; /* VFP init (24) + SP setup (8) */
+            if (hypToSvc) preamble_size += 44;
+            if (coreParking) preamble_size += 20;
+            if (multiboot) preamble_size += 4;
+        } else {
             preamble_size = multiboot ? 16 : 8;
+        }
     }
 
     int32_t initCodeSize = nofEntryPoints * arch->call_instr_size + arch->halt_seq_size + preamble_size;
@@ -2267,6 +2305,10 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
     log_puts("Init code at "); log_hex(*entry); log_ln();
     InitPointNode *ip = initPointList;
     int32_t pc = *entry;
+
+    if (debugLoop) {
+        pc += arch->EmitDebugLoop(out);
+    }
 
     if (stack_size > 0) {
         /* SP must point past the entire image including init code and stack.
@@ -3031,6 +3073,8 @@ static void usage(FILE *out) {
             "  --sysfix <name>=<Mod.Proc>   Override sysfix target (e.g. new=Kernel.NewRec)\n"
             "  --hyp-to-svc                 Emit HYP->SVC mode switch in preamble (RPi 2/3)\n"
             "  --core-parking               Park secondary cores in WFE loop (RPi 2/3)\n"
+            "  --debug-loop                 Emit register-based infinite loop at the very start\n"
+            "                                 (Escape via GDB: set $eax=0 [i386], $r3=0 [arm32], $x5=0 [rv32])\n"
             "  --trace / --no-trace         Enable/disable Trace logging\n"
             "  --trace-more                 Enable TraceMore logging\n");
 }
@@ -3125,6 +3169,8 @@ static Options parse_args(int argc, char **argv) {
             hypToSvc = true;
         } else if (strcmp(a, "--core-parking") == 0) {
             coreParking = true;
+        } else if (strcmp(a, "--debug-loop") == 0) {
+            debugLoop = true;
         } else if (strcmp(a, "--no-refs") == 0) {
             includeRefs = false;
         } else if (strcmp(a, "--trace") == 0) {
