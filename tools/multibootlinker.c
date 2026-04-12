@@ -1162,12 +1162,7 @@ static uint32_t arm_decode_imm12(uint32_t imm12) {
 
 /* ARM-specific VarConsLink data fixup.
  *
- * On i386, the fixup location contains a plain 32-bit displacement (the
- * SB-relative offset of the data item).  The linker simply adds the module's
- * static base (m->sb) to turn it into an absolute address.  This works
- * because i386 uses absolute addressing.
- *
- * On ARM, the fixup location contains a full 32-bit ARM instruction (e.g.
+ * The fixup location contains a full 32-bit ARM instruction (e.g.
  * ADD/SUB Rd, PC, #imm or LDR Rd, [PC, #off]).  The linker must:
  *   1.  Decode the instruction to extract the embedded data offset.
  *   2.  Compute the absolute target address (data_offset + fixval).
@@ -1175,10 +1170,6 @@ static uint32_t arm_decode_imm12(uint32_t imm12) {
  *   4.  Re-encode the instruction with the correct PC-relative offset,
  *       choosing ADD vs SUB depending on sign.
  *
- * Supported instruction classes:
- *   - Data-processing immediate  (bits [27:25] = 001)
- *   - LDR/STR immediate offset   (bits [27:26] = 01, I=0)
- *   - Anything else is treated as a raw 32-bit literal (val + fixval).
  */
 static void arm_fixup_data_at(uint8_t *code, int32_t off,
                               int32_t codeBase, int32_t fixval) {
@@ -1315,6 +1306,43 @@ static int32_t arm_EmitDebugLoop(FILE *out) {
 }
 
 /* ---- RV32 (RISC-V 32-bit) ---- */
+
+/* RV32-specific VarConsLink data fixup.
+ *
+ * Similar to ARM.
+ *
+ */
+static void rv32_fixup_data_at(uint8_t *code, int32_t off, int32_t fixval) {
+    uint32_t instr1 = (uint32_t)get_dword(code, off);
+    uint32_t instr2 = (uint32_t)get_dword(code, off + 4);
+
+    /* RV32 Compiler emits:
+     * LUI  rd, upper20  (opcode 0x37)
+     * ADDI rd, rd, lower12 (opcode 0x13) or LW/SW
+     */
+    if ((instr1 & 0x7F) == 0x37) {
+        /* 1. Decode original absolute address */
+        uint32_t upper20 = instr1 & 0xFFFFF000u;
+        int32_t lower12 = (int32_t)instr2 >> 20; /* Arithmetic shift to sign-extend */
+        int32_t abs_addr = (int32_t)upper20 + lower12;
+
+        /* 2. Add the fixup value (module base or static base) */
+        abs_addr += fixval;
+
+        /* 3. Re-encode into LUI and ADDI/LW/SW */
+        int32_t new_lower12 = ((int32_t)(abs_addr << 20)) >> 20; /* sign-extend */
+        uint32_t new_upper20 = ((uint32_t)abs_addr - (uint32_t)new_lower12) & 0xFFFFF000u;
+
+        uint32_t new_instr1 = (instr1 & 0x00000FFFu) | new_upper20;
+        uint32_t new_instr2 = (instr2 & 0x000FFFFFu) | (((uint32_t)new_lower12 & 0xFFF) << 20);
+
+        put_dword(code, off, (int32_t)new_instr1);
+        put_dword(code, off + 4, (int32_t)new_instr2);
+    } else {
+        /* Fallback for raw constant table entries (e.g., Case Tables) */
+        put_dword(code, off, (int32_t)(instr1 + (uint32_t)fixval));
+    }
+}
 
 /* Encode a RISC-V J-type immediate (for JAL).
  * The 21-bit signed offset is encoded as: imm[20|10:1|11|19:12] in bits [31:12]. */
@@ -1534,6 +1562,8 @@ static void fixup_var(uint8_t *code, DataLinkEntry *dataLinks, int32_t linkIndex
         int32_t off = (int32_t)dataLinks[linkIndex].offset[i];
         if (arch == &arch_arm32) {
             arm_fixup_data_at(code, off, codeBase, fixval);
+        } else if (arch == &arch_rv32) {
+            rv32_fixup_data_at(code, off, fixval); 
         } else {
             int32_t val = get_dword(code, off);
             put_dword(code, off, val + fixval);
@@ -1658,6 +1688,28 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                         put_dword(codebase, link, (int32_t)new_movw);
                         put_dword(codebase, link + 4, (int32_t)new_movt);
 
+                        link = nextlink;
+                    }
+                } else if (arch == &arch_rv32) {
+                    /* RV32 Procedure variable assignment */
+                    int32_t link = (int32_t)linkTab[i].link;
+                    while (link >= 0) {
+                        uint32_t instr1 = (uint32_t)get_dword(codebase, link);
+                        int32_t nextlink;
+                        
+                        /* Same link extraction as rv32_PatchFunctionCall */
+                        uint32_t chainVal = (instr1 >> 12) & 0xFFFFF;
+                        if (chainVal == 0xFFFFF) nextlink = -1;
+                        else if (chainVal >= 0x80000) nextlink = ((int32_t)(chainVal | 0xFFF00000u)) * 4 + 0x10000;
+                        else nextlink = chainVal * 4;
+
+                        /* Target address is the local entry point */
+                        uint32_t instr2 = (uint32_t)get_dword(codebase, link + 4);
+                        /* The compiler must store the Entry Index in the lower 12 bits of ADDI */
+                        uint32_t entry_idx = (instr2 >> 20) & 0xFFF;
+                        
+                        /* Patch LUI/ADDI with absolute procedure address */
+                        rv32_fixup_data_at(codebase, link, (int32_t)m->entries[entry_idx]);
                         link = nextlink;
                     }
                 } else {
