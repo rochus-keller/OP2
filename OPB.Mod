@@ -8,7 +8,7 @@ Refer to the license.txt file provided with this distribution. *)
 (*
  References:
  1. N. Wirth Oberon Language Report
- 2. Wirth/Mössenböck, Oberon-2 Langauge Report
+ 2. Wirth/Mï¿½ssenbï¿½ck, Oberon-2 Langauge Report
 *)
 
 MODULE OPB; (** non-portable *)
@@ -804,7 +804,7 @@ MODULE OPB; (** non-portable *)
  BEGIN f := x^.typ^.form; g := typ^.form;
   IF x^.class = Nconst THEN
    IF f IN intSet THEN
-    IF g IN intSet THEN
+    IF (g IN intSet) OR (g = HInt) THEN
      IF f > g THEN SetIntType(x);
       IF x^.typ^.form > g THEN err(203); x^.conval^.intval := 1 END
      END
@@ -1108,8 +1108,10 @@ MODULE OPB; (** non-portable *)
     Undef, String:
   | Byte:
     IF ~(g IN {Byte, Char, SInt}) THEN err(113) END
-  | Bool, Char, SInt, Set, HInt:
+  | Bool, Char, SInt, Set:
     IF g # f THEN err(113) END
+  | HInt:
+    IF (g # f) & ~((ynode^.class = Nconst) & (g IN intSet)) THEN err(113) END
   | Int:
     IF ~(g IN {SInt, Int}) THEN err(113) END
   | LInt:
@@ -1161,7 +1163,7 @@ MODULE OPB; (** non-portable *)
     ELSE (*DynArr*) err(113)
     END
   END ;
-  IF (ynode^.class = Nconst) & (g < f) & (g IN {SInt..Real}) & (f IN {Int..LReal}) THEN
+  IF (ynode^.class = Nconst) & (g < f) & (g IN {SInt..Real}) & (f IN {Int..LReal, HInt}) THEN
    Convert(ynode, x)
   END
  END CheckAssign;

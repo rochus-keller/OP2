@@ -637,7 +637,13 @@ Intel i386 :
  
  PROCEDURE NextWord(VAR z: Item; y: Item); (* z := 4[y] *)
  BEGIN  z := y;
-  CASE z.mode OF Reg:  z.adr := y.offs | Var, Abs: INC(z.adr, 4) | RegRel: INC(z.offs, 4)  END;
+  CASE z.mode OF 
+    Reg:  z.adr := y.offs 
+  | Var, Abs: INC(z.adr, 4) 
+  | RegRel: INC(z.offs, 4)
+  | Con:
+    IF z.adr < 0 THEN z.adr := -1 ELSE z.adr := 0 END
+  END;
  END NextWord;
  
  PROCEDURE DeRef* (VAR x: Item);

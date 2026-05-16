@@ -14,8 +14,10 @@ MODULE OP2;
   Out.String("Oberon Portable Compiler / nw, rc, nm, tk, prk "); Out.Ln;
   IF OPTR.Target = OPM.i386 THEN
     Out.String("Target: i386 (C99 version by me@rochus-keller.ch)"); Out.Ln;
-  ELSE
+  ELSIF OPTR.Target = OPM.arm32 THEN
     Out.String("Target: arm32 (backend and C99 version by me@rochus-keller.ch)"); Out.Ln; 
+  ELSE
+    Out.String("Target: rv32 (backend and C99 version by me@rochus-keller.ch)"); Out.Ln; 
   END
  END SignOn;
  
@@ -46,6 +48,7 @@ MODULE OP2;
    ELSIF ch = "2" THEN parserOpt := parserOpt / {OPM.oberon2}
    ELSIF ch = "1" THEN parserOpt := parserOpt / {OPM.oberon1}
    ELSIF ch = "T" THEN parserOpt := parserOpt / {OPM.traceprocs} (* temp *)
+   ELSIF ch = "A" THEN parserOpt := parserOpt / {OPM.aosMode}
    ELSIF ch = "." THEN
     j := 0;
     WHILE (ch # 0X) & (ch # " ") DO
@@ -103,6 +106,7 @@ MODULE OP2;
   VAR codeOpt, parserOpt: SET; extSF, newSF: BOOLEAN; p: OPT.Node; modName: OPS.Name;
  BEGIN
   ParseOptions(name, options, OPM.outputPath, OPM.outputPrefix, OPM.extension, codeOpt, parserOpt);
+  OPM.aosFlag := OPM.aosMode IN parserOpt;
   WriteMsg(source);
   OPM.Init(codeOpt, parserOpt, source, Oberon.Log); OPS.ch := " ";
   OPB.typSize := OPV.TypSize; OPV.Init(breakpc);

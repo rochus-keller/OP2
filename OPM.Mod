@@ -123,6 +123,7 @@ MODULE OPM; (** non-portable *)
   oberon2* = 19;  (** 2 - compile oberon-2 programs *)
   oberon1* = 21; (** compile oberon-1 programs *)
   traceprocs* = 24; (** trace procedure calls *) (* temp *)
+  aosMode* = 25; (** compile for Active Object System (AOS/Bluebottle) *)
   
   DefaultCodeOpt* = {inxchk, typchk, ptrinit, fullstackinit, assert};
   DefaultParserOpt* = {};
@@ -147,6 +148,7 @@ MODULE OPM; (** non-portable *)
   errName*: ARRAY 32 OF CHAR;
   first: BOOLEAN;
   extension*: ARRAY 8 OF CHAR; (** object file extension *)
+  aosFlag*: BOOLEAN; (** TRUE when compiling for AOS *)
 
  CONST
   OFtag = 0BBX; (* object file tag *)

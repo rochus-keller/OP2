@@ -535,7 +535,7 @@ References:
   VarEntryErr := FALSE; LinkErr := FALSE;
   OPO.dsize := 0; OPO.csize := 0; OPO.pc := 0; noVarEntries := 0; nofptrs := 0; nofVarConsLinks := 0;
   nofrecs := 0; nofEntries := 0; nofSavedLevel := 0;
-  OPO.csize := 4;  (*module.SELF*)
+  IF OPM.aosFlag THEN OPO.csize := 0 ELSE OPO.csize := 4 END;  (*module.SELF: 4 bytes for System 3, 0 for AOS*)
   varConsLink [0].noflinks := 0; varConsLink [0].entry := -1; varConsLink [0].noflinks := 0; 
   varConsLink [0].index := noEntry;
   nofVarCons := 1;

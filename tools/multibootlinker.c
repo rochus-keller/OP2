@@ -116,7 +116,7 @@ enum {
 
 static int32_t stackSize = DEFAULT_STACK_SIZE;
 
-static bool Trace = true;
+static bool Trace = false;
 static bool TraceMore = false;
 static bool hypToSvc = false;     /* --hyp-to-svc: emit HYP->SVC mode switch (RPi) */
 static bool coreParking = false;  /* --core-parking: park secondary cores in WFE loop (RPi) */
@@ -1703,13 +1703,28 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                         else if (chainVal >= 0x80000) nextlink = ((int32_t)(chainVal | 0xFFF00000u)) * 4 + 0x10000;
                         else nextlink = chainVal * 4;
 
-                        /* Target address is the local entry point */
+                        /* Extract entry index from ADDI immediate (bits 31:20) */
                         uint32_t instr2 = (uint32_t)get_dword(codebase, link + 4);
-                        /* The compiler must store the Entry Index in the lower 12 bits of ADDI */
                         uint32_t entry_idx = (instr2 >> 20) & 0xFFF;
-                        
-                        /* Patch LUI/ADDI with absolute procedure address */
-                        rv32_fixup_data_at(codebase, link, (int32_t)m->entries[entry_idx]);
+
+                        if ((int32_t)entry_idx >= m->nofEntries) {
+                            char buf[128];
+                            snprintf(buf, sizeof(buf),
+                                "RV32 entry254: entry index %u out of range [0..%d) in %s at offset %d",
+                                entry_idx, m->nofEntries, m->name, link);
+                            halt_msg(buf);
+                        }
+
+                        /* Write absolute procedure address directly into LUI+ADDI.
+                         * Do NOT use rv32_fixup_data_at which ADDs to existing value;
+                         * the existing value contains the entry index, not a valid offset. */
+                        uint32_t addr = (uint32_t)m->entries[entry_idx];
+                        int32_t lo12 = ((int32_t)(addr << 20)) >> 20;
+                        uint32_t hi20 = (addr - (uint32_t)lo12) & 0xFFFFF000u;
+                        uint32_t Rd = (instr1 >> 7) & 0x1F;
+                        put_dword(codebase, link, (int32_t)(hi20 | (Rd << 7) | 0x37));
+                        put_dword(codebase, link + 4,
+                            (int32_t)((((uint32_t)lo12 & 0xFFF) << 20) | (Rd << 15) | (Rd << 7) | 0x13));
                         link = nextlink;
                     }
                 } else {
@@ -3176,8 +3191,8 @@ static Options parse_args(int argc, char **argv) {
             opt.base_given = true;
         } else if (strcmp(a, "--log") == 0 && i + 1 < argc) {
             opt.log = argv[++i];
-        } else if (strcmp(a, "--autofix") == 0 && i + 1 < argc) {
-            // NOP, just here to be eaten without error
+        } else if (strcmp(a, "--autofix") == 0) {
+            /* handled in main() before parse_args */
         } else if (strcmp(a, "--path") == 0 && i + 1 < argc) {
             modulePath = argv[++i];
         } else if (strcmp(a, "--obj-suffix") == 0 && i + 1 < argc) {

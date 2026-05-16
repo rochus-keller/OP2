@@ -68,7 +68,8 @@ static void print_help(const char *prog)
     printf("  --no-stack-init   *    Disable full stack-frame zero-initialisation.\n");
     printf("  --overflow-check       Enable integer overflow checking.\n");
     printf("  --trace                Enable OPM trace mode (q).\n");
-    printf("  --trace-procs          Enable procedure-call tracing (T).\n\n");
+    printf("  --trace-procs          Enable procedure-call tracing (T).\n");
+    printf("  --aos                  Compile for Active Object System (AOS/Bluebottle).\n\n");
 
     printf("Symbol-file control:\n");
     printf("  -s, --new-symfile      Allow creation of a new symbol file.\n");
@@ -207,6 +208,7 @@ int main(int argc, char **argv)
         else if (!strcmp(arg, "--overflow-check"))  ADDOPT('v');
         else if (!strcmp(arg, "--trace"))           ADDOPT('q');
         else if (!strcmp(arg, "--trace-procs"))     ADDOPT('T');
+        else if (!strcmp(arg, "--aos"))              ADDOPT('A');
 
         /* ---- symbol-file flags ------------------------------------ */
         else if (!strcmp(arg, "-s") || !strcmp(arg, "--new-symfile"))  ADDOPT('s');

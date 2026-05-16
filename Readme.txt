@@ -13,13 +13,15 @@ Changes
 - Refactored OPT, OPM and OPB, so that i386 no longer leaks into frontend, abstracted away into new OPTR
 - Refactored OPC and OPL; OPC is now fully target independent; IR defs and data in new OPIR, no longer in OPL.
 - Added ARMv7 backend compatible with Raspberry Pi Model 3b and Zero 2
+- Added RV32 backend compatible with Olimex ESP32-P4-PC
+- Added changes necessary to compile and (hopefully) run the AOS 2004 inner core
 
-The .Mod files can be transpiled to C99 files using the AoCodeNavigator; these files are
-put into the c99 directory and built with build.sh. The resulting executable
-runs on all platforms and generates x86 OP2 v2.3.7 object files compatible with
-the Oberon System 3. Inline assembly is supported if the OPA.Data is in the same
-directory as the compiler executable. This allows to cross-compile a full
-Oberon System 3.
+The .Mod files can be transpiled to C99 files using the AoCodeNavigator or OberonIDE; 
+these files are put into the c99 directory and built with the corresponding build.sh. 
+The resulting executable runs on all platforms and generates OP2 v2.3.7 object files compatible with
+the Oberon System 3. Inline assembly is supported (the i386 version requires OPA.Data is in the same
+directory as the compiler executable). This allows to cross-compile a full Oberon System 3
+for i386, ARMv7 and RV32.
 
 The bootlinker is a migration of the Oberon System BootLinker.Mod with a few additions
 which make it useful for other projects than the Oberon System. It can generate a
@@ -27,4 +29,4 @@ Multiboot header and add stack initialization. With this, e.g. the MainLoop test
 together with the RawOut module work well on QEMU. Newer versions of the bootlinker
 include multi-target support.
 
-NOTE that the ARMv7 backend is WORK-IN-PROGRESS
+NOTE that the RV32 backend is WORK-IN-PROGRESS

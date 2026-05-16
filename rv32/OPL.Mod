@@ -1,31 +1,34 @@
-(* OPL - ARM32 A32 Code Generator (translation from Pseudo RISC to ARM32)
- 
-	Architecture: ARMv7-A A32 (32-bit ARM encoding only, no Thumb)
-	FPU: VFPv3-D32 scalar (D0-D31 / S0-S63)
-	Calling convention: stack-based, callee-cleans
-	- All parameters on stack, right-to-left
-	- Prologue: PUSH {FP, LR}; MOV FP, SP; SUB SP, SP, #locSize
-	- Epilogue: MOV SP, FP; POP {FP, LR}; ADD SP, SP, #parSize; BX LR
-	- Return values: R0 (int/ptr), S0 (REAL), D0 (LONGREAL)
-	Register allocation:
-	- Allocatable GPRs: R0-R3 (scratch), R4-R10 (callee-saved)
-	- R11 (FP): frame pointer - dedicated
-	- R12 (IP): scratch - used for large immediates/calls
-	- R13 (SP): stack pointer - dedicated
-	- R14 (LR): link register
-	VFP registers: S0-S31 (single), D0-D15 (double, overlapping S0-S31)
-	- Allocate from S2/D1 upward (S0/D0 reserved for return values)
- 
-	Copyright 2025 Rochus Keller <mailto:me@rochus-keller.ch>
+(* OPL - RV32 Code Generator (translation from Pseudo RISC to RV32)
+   RV32 backend for the OP2 Oberon-90 compiler
 
-	GNU General Public License Usage
-	This file may be used under the terms of the GNU General Public
-	License (GPL) versions 2.0 or 3.0 as published by the Free Software
-	Foundation and appearing in the file LICENSE.GPL included in
-	the packaging of this file. Please review the following information
-	to ensure GNU General Public Licensing requirements will be met:
-	http://www.fsf.org/licensing/licenses/info/GPLv2.html and
-	http://www.gnu.org/copyleft/gpl.html.
+   Architecture: RV32IMAF (32-bit RISC-V with Integer, Multiply, Atomic, Float extensions)
+   for the Olimex ESP32-P4-PC board
+   FPU: Single-precision hardware (f0-f31), double-precision soft-float via SysFix
+   Calling convention: stack-based, callee-cleans
+     - All parameters on stack, right-to-left
+     - Prologue: ADDI sp,sp,-8; SW ra,4(sp); SW s0,0(sp); MV s0,sp; ADDI sp,sp,-locSize
+     - Epilogue: MV sp,s0; LW s0,0(sp); LW ra,4(sp); ADDI sp,sp,8+parSize; JALR zero,ra,0
+     - Return values: a0 (int/ptr), fa0 (REAL), a0+a1 (LONGREAL)
+  Register allocation:
+    - Allocatable GPRs: a0-a7 (x10-x17), t1-t4 (x6-x7, x28-x29), s1 (x9)
+    - s0/FP (x8): frame pointer - dedicated
+    - t0 (x5): scratch - used for large immediates/indexed addressing
+    - t5/t6 (x30-x31): comparison scratch registers
+    - sp (x2): stack pointer - dedicated
+    - ra (x1): return address - dedicated
+  FPU registers: f0-f31 (single-precision)
+    - Allocate from f1 upward (f0/fa0 reserved for return values)
+
+   Copyright 2026 Rochus Keller <mailto:me@rochus-keller.ch>
+
+   GNU General Public License Usage
+   This file may be used under the terms of the GNU General Public
+   License (GPL) versions 2.0 or 3.0 as published by the Free Software
+   Foundation and appearing in the file LICENSE.GPL included in
+   the packaging of this file. Please review the following information
+   to ensure GNU General Public Licensing requirements will be met:
+   http://www.fsf.org/licensing/licenses/info/GPLv2.html and
+   http://www.gnu.org/copyleft/gpl.html.
 *)
 
 MODULE OPL; (** non-portable *)
@@ -153,29 +156,25 @@ MODULE OPL; (** non-portable *)
   useReg = {useR0, useR1, useR2, useR3, useR4, useR5, useR6, useR7};
   tryReg = {tryR0, tryR1, tryR2, tryR3, tryR6, tryR7};
 
-  (* ARM32 GPR numbers (from OPO) *)
-  R0 = OPO.R0; R1 = OPO.R1; R2 = OPO.R2; R3 = OPO.R3;
-  R4 = OPO.R4; R5 = OPO.R5; R6 = OPO.R6; R7 = OPO.R7;
-  R8 = OPO.R8; R9 = OPO.R9; R10 = OPO.R10;
-  FP = OPO.FP; (* R11 - frame pointer *)
-  IP = OPO.IP; (* R12 - intra-procedure scratch *)
-  SP = OPO.SP; (* R13 - stack pointer *)
-  LR = OPO.LR; (* R14 - link register *)
-  PC = OPO.PC; (* R15 - program counter *)
+  (* RV32 GPR numbers (from OPO) *)
+  X0 = OPO.X0; RA = OPO.RA; SP = OPO.SP; GP = OPO.GP; TP = OPO.TP;
+  T0 = OPO.T0; T1 = OPO.T1; T2 = OPO.T2;
+  S0 = OPO.S0; FP = OPO.FP; S1 = OPO.S1;
+  A0 = OPO.A0; A1 = OPO.A1; A2 = OPO.A2; A3 = OPO.A3;
+  A4 = OPO.A4; A5 = OPO.A5; A6 = OPO.A6; A7 = OPO.A7;
+  S2 = OPO.S2; S3 = OPO.S3; S4 = OPO.S4; S5 = OPO.S5;
+  S6 = OPO.S6; S7 = OPO.S7; S8 = OPO.S8; S9 = OPO.S9;
+  S10 = OPO.S10; S11 = OPO.S11;
+  T3 = OPO.T3; T4 = OPO.T4; T5 = OPO.T5; T6 = OPO.T6;
 
-  (* ARM32 condition codes (from OPO) *)
-  CondEQ = OPO.CondEQ; CondNE = OPO.CondNE;
-  CondCS = OPO.CondCS; CondCC = OPO.CondCC;
-  CondMI = OPO.CondMI; CondPL = OPO.CondPL;
-  CondVS = OPO.CondVS; CondVC = OPO.CondVC;
-  CondHI = OPO.CondHI; CondLS = OPO.CondLS;
-  CondGE = OPO.CondGE; CondLT = OPO.CondLT;
-  CondGT = OPO.CondGT; CondLE = OPO.CondLE;
-  CondAL = OPO.CondAL;
-
-  (* Shift types *)
-  ShiftLSL = OPO.ShiftLSL; ShiftLSR = OPO.ShiftLSR;
-  ShiftASR = OPO.ShiftASR; ShiftROR = OPO.ShiftROR;
+  (* RV32 condition codes (from OPO) *)
+  ccEQ = OPO.ccEQ; ccNE = OPO.ccNE;
+  ccLT = OPO.ccLT; ccGE = OPO.ccGE;
+  ccGT = OPO.ccGT; ccLE = OPO.ccLE;
+  ccHI = OPO.ccHI; ccHS = OPO.ccHS;
+  ccLO = OPO.ccLO; ccLS = OPO.ccLS;
+  ccCS = OPO.ccCS; ccCC = OPO.ccCC;
+  ccAL = OPO.ccAL;
 
   (* Size constants *)
   Bit8 = OPIR.Bit8; Bit16 = OPIR.Bit16;
@@ -185,7 +184,7 @@ MODULE OPL; (** non-portable *)
   noDisp = OPO.noDisp;
 
   (* Register allocation states *)
-  free = -1; Occupied = MIN(INTEGER); (* Splitted not needed for ARM32 *)
+  free = -1; Occupied = MIN(INTEGER);
 
   BUG = 41;
 
@@ -261,17 +260,16 @@ MODULE OPL; (** non-portable *)
   MaxEntry* = 128;
   LinkLength = 512;
   MaxSaveLevel = 32;
+  MaxFwdFixups = 1024;
 
-  (* VFP register allocation 
-    Single-precision: S0 reserved for return, allocate S2..S31 
-    Double-precision: D0 reserved for return, allocate D1..D15 *)
-    
-  (* We use a flat array of 16 VFP "slots" for double registers D0..D15 *)
-  MaxFRegs = 16; (* D0..D15 *)
-  FRegBase = 0;  (* D0 is index 0 *)
+  (* FPU register allocation *)
+  (* Single-precision: f0/fa0 reserved for return, allocate f1..f31 *)
+  MaxFRegs = 32; (* f0..f31 *)
+  FRegBase = 0;  (* f0 is index 0 *)
 
-  (* Number of allocatable GPRs: R0-R10 (11 registers, R11=FP, R12=IP, R13=SP, R14=LR) *)
-  MaxGPRs = 11; (* R0..R10 *)
+   (* Number of allocatable GPRs: a0-a7 (8), t1-t2 (2), t3-t4 (2), s1-s11 (11) = 23 registers *)
+  (* We map them to indices 0-22 in regTab *)
+  MaxGPRs = 23;
 
   PtrInit = 5;
 
@@ -282,8 +280,7 @@ MODULE OPL; (** non-portable *)
   MapDesc* = OPIR.MapDesc;
 
   LinkRec = RECORD
-   offset: LONGINT;
-   mod, entry: INTEGER;
+   offset, mod, entry: INTEGER;
   END;
 
   VarConsRec = RECORD
@@ -298,7 +295,7 @@ MODULE OPL; (** non-portable *)
 
   SavedRegRec = RECORD
    reg: ARRAY MaxGPRs OF INTEGER;  (* saved GPR allocation states *)
-   freg: ARRAY MaxFRegs OF INTEGER; (* saved VFP allocation states *)
+   freg: ARRAY MaxFRegs OF INTEGER; (* saved FPU allocation states *)
   END;
 
   PtrTable = POINTER TO ARRAY OF LONGINT;
@@ -318,30 +315,71 @@ MODULE OPL; (** non-portable *)
   nofptrs: LONGINT;
   ConstErr, RegErr, VarEntryErr, LinkErr: BOOLEAN;
 
-  (* register allocation 
-    regTab[i] = free (-1), Occupied (MIN(INTEGER)), or pReg index (>= 0)
-     Indices 0..10 correspond to R0..R10 *)
+  (* RV32 register allocation *)
+  (* regTab[i] = free (-1), Occupied (MIN(INTEGER)), or pReg index (>= 0) *)
+   (* Indices 0-22 correspond to allocatable GPRs:
+   *   0-7: a0-a7 (x10-x17)
+   *   8-9: t1-t2 (x6-x7)
+   *   10-11: t3-t4 (x28-x29)
+   *   12: s1 (x9)
+   *   13-22: s2-s11 (x18-x27)
+   *)
   regTab: ARRAY MaxGPRs OF LONGINT;
 
-  (* VFP register allocation: fregTab[i] for D0..D15 *)
+  (* FPU register allocation: fregTab[i] for f0..f31 *)
   fregTab: ARRAY MaxFRegs OF LONGINT;
 
   savedRegs: ARRAY MaxSaveLevel OF SavedRegRec;
   nofSavedLevel: INTEGER;
 
-   trapFixupTab: ARRAY nofTrapFixups OF LONGINT;
+  trapFixupTab: ARRAY nofTrapFixups OF LONGINT;
+
+  (* Forward jump fixup table: records (machine code pos, target IR index) pairs *)
+  fwdFixupPos: ARRAY MaxFwdFixups OF LONGINT;
+  fwdFixupTarget: ARRAY MaxFwdFixups OF LONGINT;
+  nofFwdFixups: LONGINT;
 
   nofStr: INTEGER;
   linkTable*: LONGINT;
   gVarLink*: LONGINT;
-  hasHWDiv*: BOOLEAN; (* TRUE: emit SDIV/UDIV; FALSE: emit sysfix call to DivMod32 *)
-
-  (* VFP return value tracking *)
-  currentProcRetForm: SHORTINT; (* return type form of current procedure: Real=7, LReal=8, or 0 *)
-  lastFstoreFreg: SHORTINT; (* D-register index used by last Fstore, or -1 *)
-  spSubPending: BOOLEAN; (* TRUE when Gen3 Sub from SP occurred, consumed by Fstore/RepMovs *)
 
   explist: ExpTable; exppos: LONGINT;
+
+  (* LONGREAL hi-word register tracking.
+     On RV32 without D extension, LONGREAL (64-bit) values use two GPRs:
+     the lo word in the assigned register, the hi word in lrealHi[loReg].
+     lrealHi[r] = -1 means no hi-word companion for register r. *)
+  lrealHi: ARRAY 32 OF SHORTINT;
+
+ PROCEDURE ClearLRealHi;
+  VAR i: SHORTINT;
+ BEGIN
+  FOR i := 0 TO 31 DO lrealHi[i] := -1 END
+ END ClearLRealHi;
+
+ PROCEDURE SetLRealHi(loReg, hiReg: SHORTINT);
+ BEGIN
+  IF (loReg >= 0) & (loReg < 32) THEN lrealHi[loReg] := hiReg END
+ END SetLRealHi;
+
+ PROCEDURE GetLRealHi(loReg: SHORTINT): SHORTINT;
+ BEGIN
+  IF (loReg >= 0) & (loReg < 32) THEN RETURN lrealHi[loReg] END;
+  RETURN -1
+ END GetLRealHi;
+
+ PROCEDURE FreeLRealHi(loReg: SHORTINT);
+  VAR hi: SHORTINT;
+ BEGIN
+  IF (loReg >= 0) & (loReg < 32) THEN
+   hi := lrealHi[loReg];
+   IF hi > -1 THEN
+    FreeReg(hi);
+    lrealHi[loReg] := -1
+   END
+  END
+ END FreeLRealHi;
+
 
  PROCEDURE Init*;
  BEGIN
@@ -350,7 +388,6 @@ MODULE OPL; (** non-portable *)
   OPO.dsize := 0; OPO.csize := 0; OPO.pc := 0;
   noVarEntries := 0; nofptrs := 0; nofVarConsLinks := 0;
   nofrecs := 0; nofEntries := 0; nofSavedLevel := 0;
-  lastFstoreFreg := -1; currentProcRetForm := 0; spSubPending := FALSE;
   IF OPM.aosFlag THEN OPO.csize := 0 ELSE OPO.csize := 4 END; (* module.SELF: 4 bytes for System 3, 0 for AOS *)
   varConsLink[0].noflinks := 0; varConsLink[0].entry := -1;
   varConsLink[0].noflinks := 0; varConsLink[0].index := noEntry;
@@ -376,26 +413,38 @@ MODULE OPL; (** non-portable *)
   link[17].mod := 0; link[17].entry := F64NegEntryNr; link[17].offset := Nil;
   link[18].mod := 0; link[18].entry := F64AbsEntryNr; link[18].offset := Nil;
   nofLinks := InitLinks;
-  hasHWDiv := TRUE;
+  ClearLRealHi
  END Init;
 
 
  PROCEDURE RegToGPR(reg: SHORTINT): SHORTINT;
- (* Convert regTab index (0..10) to ARM32 GPR number (R0..R10) *)
+ (* Convert regTab index (0..22) to RV32 GPR number *)
  BEGIN
-  RETURN reg (* identity: index 0 = R0, ..., index 10 = R10 *)
+  IF reg <= 7 THEN RETURN SHORT(A0 + reg) (* a0-a7: x10-x17 *)
+  ELSIF reg <= 9 THEN RETURN SHORT(T1 + (reg - 8)) (* t1-t2: x6-x7 *)
+  ELSIF reg <= 11 THEN RETURN SHORT(T3 + (reg - 10)) (* t3-t4: x28-x29 *)
+  ELSIF reg = 12 THEN RETURN S1 (* s1: x9 *)
+  ELSE RETURN SHORT(S2 + (reg - 13)) (* s2-s11: x18-x27 *)
+  END
  END RegToGPR;
 
  PROCEDURE GPRToReg(gpr: SHORTINT): SHORTINT;
- (* Convert ARM32 GPR number to regTab index *)
+ (* Convert RV32 GPR number to regTab index *)
  BEGIN
-  RETURN gpr (* identity *)
+  IF (gpr >= A0) & (gpr <= A7) THEN RETURN SHORT(gpr - A0) (* a0-a7 -> 0-7 *)
+  ELSIF (gpr >= T1) & (gpr <= T2) THEN RETURN SHORT(8 + (gpr - T1)) (* t1-t2 -> 8-9 *)
+  ELSIF (gpr >= T3) & (gpr <= T4) THEN RETURN SHORT(10 + (gpr - T3)) (* t3-t4 -> 10-11 *)
+  ELSIF gpr = S1 THEN RETURN 12 (* s1 -> 12 *)
+  ELSIF (gpr >= S2) & (gpr <= S11) THEN RETURN SHORT(13 + (gpr - S2)) (* s2-s11 -> 13-22 *)
+  ELSE RETURN none
+  END
  END GPRToReg;
 
  PROCEDURE IsAllocatable(gpr: SHORTINT): BOOLEAN;
- (* Returns TRUE if the GPR can be allocated (R0-R10) *)
+ (* Returns TRUE if the GPR can be allocated (a0-a7, t1-t2, t3-t4, s1-s11) *)
  BEGIN
-  RETURN (gpr >= R0) & (gpr <= R10)
+  RETURN ((gpr >= A0) & (gpr <= A7)) OR ((gpr >= T1) & (gpr <= T2)) OR
+         ((gpr >= T3) & (gpr <= T4)) OR ((gpr >= S1) & (gpr <= S11))
  END IsAllocatable;
 
  PROCEDURE loaded(pReg: LONGINT): BOOLEAN;
@@ -405,95 +454,63 @@ MODULE OPL; (** non-portable *)
   END
  END loaded;
 
-      PROCEDURE GetReg(VAR reg: SHORTINT);
- (* Returns any free allocatable GPR (R0-R10) and marks it occupied *)
- (* Allocation order: R0-R3 (scratch) first, then R4-R10 (callee-saved) *)
- (* If all registers are full, evict a re-computable instruction *)
-      VAR r: SHORTINT; pReg, bestPReg: LONGINT; bestR, op: SHORTINT;
-
-   PROCEDURE Evictable(op: SHORTINT): BOOLEAN;
-   (* Returns TRUE if the instruction category can be re-computed by Load() *)
-   BEGIN
-    RETURN ((op >= Ld) & (op <= Ldbwu)) (* Load instructions: op/32 = 1..7 *)
-        OR (op = Lea)                    (* LEA: address computation *)
-        OR (op = Add) OR (op = Sub)      (* Binary arithmetic *)
-        OR (op = Neg) OR (op = Not)      (* Unary arithmetic *)
-   END Evictable;
-
-    BEGIN
-     (* Try R0..R10 in order *)
-     r := R0;
-     WHILE (r <= R10) & (regTab[r] # free) DO INC(r) END;
-     IF r > R10 THEN
-      (* All registers occupied: try to evict a re-computable instruction.
-         Load, Lea, Add, Sub, Neg, Not can all be re-executed by Load(). *)
-      bestR := none; bestPReg := -1;
-      r := R10;
-      WHILE r >= R0 DO
-       pReg := regTab[r];
-       IF (pReg > none) & (pReg # Occupied) THEN
-        op := SHORT(OPIR.Instr[pReg].op DIV 32);
-        IF Evictable(op) THEN
-         (* Prefer evicting the oldest (lowest pReg number) to minimize re-use distance *)
-         IF (bestR = none) OR (pReg < bestPReg) THEN
-          bestR := r; bestPReg := pReg
-         END
-        END
-       END;
-       DEC(r)
-      END;
-      IF bestR # none THEN
-       (* Evict: mark the pReg as not loaded so FindLoadReg will reload it *)
-       OPIR.Instr[bestPReg].reg := (-2) - bestR;
-       regTab[bestR] := free;
-       r := bestR
-      ELSE
-       OPM.err(215); RegErr := TRUE; reg := R0; RETURN
-      END
-     END;
-     regTab[r] := Occupied;
-     reg := r
-    END GetReg;
+ PROCEDURE GetReg(VAR reg: SHORTINT);
+ (* Returns any free allocatable GPR and marks it occupied *)
+ (* Allocation order: a0-a7 (scratch) first, then t1-t2, t3-t4, s1-s11 *)
+  VAR r: SHORTINT;
+ BEGIN
+  (* Try indices 0..MaxGPRs-1 in order *)
+  r := 0;
+  WHILE (r < MaxGPRs) & (regTab[r] # free) DO INC(r) END;
+  IF r >= MaxGPRs THEN
+   OPM.err(215); RegErr := TRUE; reg := 0; RETURN
+  END;
+  regTab[r] := Occupied;
+  reg := RegToGPR(r)
+ END GetReg;
 
  PROCEDURE GetThisReg(this: SHORTINT);
  (* Marks 'this' GPR as occupied. If occupied, moves its value to another register *)
-  VAR r: SHORTINT; pReg: LONGINT;
+  VAR r, idx: SHORTINT; pReg: LONGINT;
  BEGIN
   ASSERT(IsAllocatable(this));
-  IF regTab[this] # free THEN
-   IF regTab[this] = Occupied THEN
+  idx := GPRToReg(this);
+  IF regTab[idx] # free THEN
+   IF regTab[idx] = Occupied THEN
     (* Register is occupied but not tracking a pReg - just mark it *)
-    (* This can happen for SP/FP which are always occupied *)
    ELSE
     (* Move the current occupant to another register *)
-    pReg := regTab[this];
+    pReg := regTab[idx];
     ASSERT(pReg >= 0);
     GetReg(r);
-    regTab[r] := pReg;
+    regTab[GPRToReg(r)] := pReg;
     OPIR.Instr[pReg].reg := r;
-    OPO.GenMOVReg(CondAL, r, this)
+    OPO.GenMOV(r, this)
    END
   END;
-  regTab[this] := Occupied
+  regTab[idx] := Occupied
  END GetThisReg;
 
-  PROCEDURE FreeReg(reg: SHORTINT);
+ PROCEDURE FreeReg(reg: SHORTINT);
  (* Releases a GPR *)
-  VAR pReg: LONGINT;
+  VAR pReg: LONGINT; idx: SHORTINT;
  BEGIN
   IF (reg > none) & IsAllocatable(reg) THEN
-   pReg := regTab[reg];
+   idx := GPRToReg(reg);
+   pReg := regTab[idx];
    IF pReg > none THEN OPIR.Instr[pReg].reg := -2 - reg END;
-   regTab[reg] := free
+   regTab[idx] := free
   END
  END FreeReg;
 
  PROCEDURE DecReg(reg: SHORTINT);
  (* Decrements use count of register; frees if count reaches 0 *)
-  VAR pReg: LONGINT;
+  VAR pReg: LONGINT; idx: SHORTINT;
  BEGIN
   IF reg > none THEN
-   IF IsAllocatable(reg) THEN pReg := regTab[reg]
+   IF IsAllocatable(reg) THEN
+    idx := GPRToReg(reg);
+    pReg := regTab[idx]
    ELSE pReg := none
    END;
    IF pReg > none THEN
@@ -506,10 +523,11 @@ MODULE OPL; (** non-portable *)
  END DecReg;
 
  PROCEDURE LastUse(reg: SHORTINT): BOOLEAN;
-  VAR pReg: LONGINT;
+  VAR pReg: LONGINT; idx: SHORTINT;
  BEGIN
   IF ~IsAllocatable(reg) THEN RETURN FALSE END;
-  pReg := regTab[reg];
+  idx := GPRToReg(reg);
+  pReg := regTab[idx];
   IF pReg > none THEN RETURN OPIR.Instr[pReg].used = 1
   ELSE RETURN TRUE
   END
@@ -520,68 +538,68 @@ MODULE OPL; (** non-portable *)
   VAR reg: SHORTINT;
  BEGIN
   GetReg(reg);
-  regTab[reg] := pReg;
+  regTab[GPRToReg(reg)] := pReg;
   OPIR.Instr[pReg].reg := reg
  END AssignNewReg;
 
-  PROCEDURE AssignThisReg(pReg: LONGINT; this: SHORTINT);
+ PROCEDURE AssignThisReg(pReg: LONGINT; this: SHORTINT);
  (* Assigns pReg to register 'this'. Moves 'this' if occupied. *)
  BEGIN
   IF ~IsAllocatable(this) THEN
-   (* Non-allocatable register (IP/SP/FP/LR): redirect to a free allocatable register.
-      IP is used as scratch by Load/Store/EmitXxxImm; assigning IR results to it
-      causes silent clobbering because IP is not tracked in regTab. *)
+   (* Non-allocatable register (T0/SP/FP/RA): redirect to a free allocatable register.
+      T0 is used as scratch by Load/Store/LoadImm32; assigning IR results to it
+      causes silent clobbering because T0 is not tracked in regTab. *)
    AssignNewReg(pReg); RETURN
   END;
   GetThisReg(this);
-  regTab[this] := pReg;
+  regTab[GPRToReg(this)] := pReg;
   OPIR.Instr[pReg].reg := this
  END AssignThisReg;
 
-  PROCEDURE AssignReg(pReg: LONGINT; VAR reg, base, inx: SHORTINT);
+ PROCEDURE AssignReg(pReg: LONGINT; VAR reg, base, inx: SHORTINT);
  (* Assigns pReg to a register, considering hints and reuse.
     When a useReg hint forces AssignThisReg, the existing occupant of the
     target register may be moved to a different register.  We must fixup
     the VAR parameters reg/base/inx so callers (especially DecCheckReg)
-    see the up-to-date register numbers - otherwise they operate on stale
+    see the up-to-date register numbers ? otherwise they operate on stale
     values and can evict the instruction that was just assigned. *)
-   VAR hint, pRegReg, pRegBase, pRegInx: LONGINT;
+  VAR hint, pRegReg, pRegBase, pRegInx: LONGINT;
  BEGIN
-   hint := OPIR.Instr[pReg].hint;
-   IF hint >= tryR0 THEN
-    IF regTab[hint - tryR0] = free THEN
-     AssignThisReg(pReg, SHORT(SHORT(hint - tryR0)));
-     RETURN
-    END;
-    hint := noHint
+  hint := OPIR.Instr[pReg].hint;
+  IF hint >= tryR0 THEN
+   IF regTab[hint - tryR0] = free THEN
+    AssignThisReg(pReg, RegToGPR(SHORT(SHORT(hint - tryR0))));
+    RETURN
    END;
-   IF hint <= noHint THEN
-    IF (reg = none) OR ~IsAllocatable(reg) OR ~LastUse(reg) THEN AssignNewReg(pReg)
-    ELSE OPIR.Instr[pReg].reg := reg
-    END
-   ELSE
-    (* Save pReg indices before AssignThisReg may move occupants *)
-    pRegReg := none; pRegBase := none; pRegInx := none;
-    IF (reg > none) & IsAllocatable(reg) THEN pRegReg := regTab[reg] END;
-    IF (base > none) & IsAllocatable(base) THEN pRegBase := regTab[base] END;
-    IF (inx > none) & IsAllocatable(inx) THEN pRegInx := regTab[inx] END;
-    AssignThisReg(pReg, SHORT(SHORT(hint)));
-    (* Fixup: occupants may have been moved to new registers *)
-    IF (reg > none) & (pRegReg > none) THEN reg := OPIR.Instr[pRegReg].reg END;
-    IF (base > none) & (pRegBase > none) THEN base := OPIR.Instr[pRegBase].reg END;
-    IF (inx > none) & (pRegInx > none) THEN inx := OPIR.Instr[pRegInx].reg END
+   hint := noHint
+  END;
+  IF hint <= noHint THEN
+   IF (reg = none) OR ~IsAllocatable(reg) OR ~LastUse(reg) THEN AssignNewReg(pReg)
+   ELSE OPIR.Instr[pReg].reg := reg
    END
+  ELSE
+   (* Save pReg indices before AssignThisReg may move occupants *)
+   pRegReg := none; pRegBase := none; pRegInx := none;
+   IF (reg > none) & IsAllocatable(reg) THEN pRegReg := regTab[GPRToReg(reg)] END;
+   IF (base > none) & IsAllocatable(base) THEN pRegBase := regTab[GPRToReg(base)] END;
+   IF (inx > none) & IsAllocatable(inx) THEN pRegInx := regTab[GPRToReg(inx)] END;
+   AssignThisReg(pReg, RegToGPR(SHORT(SHORT(hint))));
+   (* Fixup: occupants may have been moved to new registers *)
+   IF (reg > none) & (pRegReg > none) THEN reg := OPIR.Instr[pRegReg].reg END;
+   IF (base > none) & (pRegBase > none) THEN base := OPIR.Instr[pRegBase].reg END;
+   IF (inx > none) & (pRegInx > none) THEN inx := OPIR.Instr[pRegInx].reg END
+  END
  END AssignReg;
 
  PROCEDURE DecCheckReg(pReg: LONGINT; src, base, inx: SHORTINT);
  (* Decrements use counts and updates register tracking *)
-  VAR reg: SHORTINT;
+  VAR reg, idx: SHORTINT;
 
   PROCEDURE ReleaseReg(r: SHORTINT);
    VAR p: LONGINT;
   BEGIN
    IF r > none THEN
-    IF IsAllocatable(r) THEN p := regTab[r]
+    IF IsAllocatable(r) THEN p := regTab[GPRToReg(r)]
     ELSE p := none
     END;
     IF p > none THEN OPIR.Instr[p].reg := -2 - r END
@@ -601,18 +619,17 @@ MODULE OPL; (** non-portable *)
   CheckRegister(reg, base);
   CheckRegister(reg, inx);
   IF (reg > none) & IsAllocatable(reg) THEN
-   regTab[reg] := pReg
+   idx := GPRToReg(reg);
+   regTab[idx] := pReg
   END
  END DecCheckReg;
 
-  PROCEDURE FindReg(pReg: LONGINT; VAR reg: SHORTINT);
+ PROCEDURE FindReg(pReg: LONGINT; VAR reg: SHORTINT);
  BEGIN
-  IF pReg > none THEN
-   IF ~loaded(pReg) THEN Load(OPIR.Instr[pReg]) END;
-   reg := OPIR.Instr[pReg].reg
+  ASSERT(loaded(pReg));
+  IF pReg > none THEN reg := OPIR.Instr[pReg].reg
   ELSIF pReg = RiscSP THEN reg := SP
-  ELSIF pReg = RiscFP THEN reg := FP
-  ELSE reg := none
+  ELSE reg := FP
   END
  END FindReg;
 
@@ -644,17 +661,16 @@ MODULE OPL; (** non-portable *)
   END
  END FindMemReg;
 
-(*  VFP  *)
 
  PROCEDURE GetFreg(VAR freg: SHORTINT);
- (* Returns any free VFP double register D0..D15 *)
+ (* Returns any free FPU register f0..f31 *)
   VAR i: SHORTINT;
  BEGIN
-  (* Start from D1 to keep D0 for return values *)
+  (* Start from f1 to keep f0/fa0 for return values *)
   i := 1;
   WHILE (i < MaxFRegs) & (fregTab[i] # free) DO INC(i) END;
   IF i >= MaxFRegs THEN
-   (* Try D0 as last resort *)
+   (* Try f0 as last resort *)
    IF fregTab[0] = free THEN i := 0
    ELSE OPM.err(216); RegErr := TRUE; freg := 0; RETURN
    END
@@ -707,15 +723,6 @@ MODULE OPL; (** non-portable *)
   RETURN (instr.op MOD 8) = 3 (* size=3 means float/single *)
  END IsSinglePrec;
 
- PROCEDURE FregToSreg(freg: SHORTINT): SHORTINT;
- (* Convert double-register index to single-register index *)
- (* D0 -> S0, D1 -> S2, D2 -> S4, etc. (each D-reg = 2 S-regs) *)
- BEGIN
-  RETURN freg * 2
- END FregToSreg;
-
-(*  Object file  *)
-
  PROCEDURE NewVarCons*(mod, entry: INTEGER; VAR index: LONGINT);
   VAR i: LONGINT; var: VarConsTable;
  BEGIN
@@ -746,7 +753,7 @@ MODULE OPL; (** non-portable *)
    WHILE varConsTab[index].next # noEntry DO index := varConsTab[index].next END;
    varConsTab[index].next := nofVarConsLinks
   END;
-  varConsTab[nofVarConsLinks].offset := SHORT(offset DIV 4);
+  varConsTab[nofVarConsLinks].offset := SHORT(offset);
   varConsTab[nofVarConsLinks].next := noEntry;
   INC(nofVarConsLinks)
  END VarConsLink;
@@ -794,21 +801,28 @@ MODULE OPL; (** non-portable *)
  END NewLink;
 
  PROCEDURE AddLink(index, offset: LONGINT);
- (* BL instruction is at 'offset'; store fixup chain in the BL's imm24 field *)
- (* The chain stores the previous offset as a word offset (byte offset DIV 4) *)
-  VAR old: LONGINT;
+ (* RV32: JAL instruction is at 'offset'; store fixup chain in the JAL's imm20 field *)
+ (* The chain is encoded as: imm20 = (nextoffset >> 2) & 0xFFFFF *)
+  VAR old, oldImm20: LONGINT;
  BEGIN
   IF ~LinkErr THEN
    OPO.GetWord(offset, old);
+   (* Extract current imm20 from JAL instruction (bits [31:12]) *)
+   oldImm20 := (old DIV 1000H) MOD 100000H;
    IF link[index].offset = Nil THEN
-    (* First entry: encode -1 as sentinel (0xFFFFFF) *)
-    OPO.PutWordAt(offset, (old DIV 1000000H) * 1000000H + 0FFFFFFH)
+    (* First entry: encode -1 as sentinel (0xFFFFF = -1 in 20-bit) *)
+    OPO.PutWordAt(offset, (old MOD 1000H) + 0FFFFF000H)
    ELSE
-    (* Chain: encode previous offset as word offset *)
-    OPO.PutWordAt(offset, (old DIV 1000000H) * 1000000H +
-     (link[index].offset DIV 4 MOD 1000000H))
+    (* Chain: encode previous offset >> 2 *)
+    IF link[index].offset >= 8000H THEN
+     OPO.PutWordAt(offset, (old MOD 1000H) +
+      (((link[index].offset - 10000H) DIV 4) MOD 100000H) * 1000H)
+    ELSE
+     OPO.PutWordAt(offset, (old MOD 1000H) +
+      ((link[index].offset DIV 4) MOD 100000H) * 1000H)
+    END
    END;
-   link[index].offset := offset
+   link[index].offset := SHORT(offset)
   END
  END AddLink;
 
@@ -886,221 +900,366 @@ MODULE OPL; (** non-portable *)
   END
  END CaseJump;
 
-(* Load / Store / LEA  *)
 
- PROCEDURE MapSysReg(hint: LONGINT): SHORTINT;
+(* RV32 immediate helpers: handle arbitrary 32-bit immediates.
+   RV32 I-type instructions use 12-bit signed immediates (-2048..2047).
+   For values outside this range, we load into T0 (scratch register). *)
+
+ PROCEDURE FitsImm12(imm: LONGINT): BOOLEAN;
+ BEGIN RETURN (imm >= -2048) & (imm <= 2047)
+ END FitsImm12;
+
+ PROCEDURE EmitAddImm(Rd, Rn: LONGINT; imm: LONGINT);
  BEGIN
-  IF hint = 4 THEN RETURN SP
-  ELSIF hint = 5 THEN RETURN FP
-  ELSE RETURN SHORT(SHORT(hint))
+  IF FitsImm12(imm) THEN
+   OPO.GenADDI(Rd, Rn, imm)
+  ELSE
+   OPO.LoadImm32(T0, imm);
+   OPO.GenADD(Rd, Rn, T0)
   END
- END MapSysReg;
- 
- PROCEDURE Load(VAR instr: Instruction);
-   VAR
-    mode, size, base, inx, dummy, memBase: SHORTINT;
-    disp: LONGINT;
-    op: LONGINT;
+ END EmitAddImm;
+
+ PROCEDURE EmitSubImm(Rd, Rn: LONGINT; imm: LONGINT);
  BEGIN
-   op := instr.op DIV 32;
+  IF FitsImm12(-imm) THEN
+   OPO.GenADDI(Rd, Rn, -imm)
+  ELSE
+   OPO.LoadImm32(T0, imm);
+   OPO.GenSUB(Rd, Rn, T0)
+  END
+ END EmitSubImm;
+
+ PROCEDURE EmitAndImm(Rd, Rn: LONGINT; imm: LONGINT);
+ BEGIN
+  IF FitsImm12(imm) THEN
+   OPO.GenANDI(Rd, Rn, imm)
+  ELSE
+   OPO.LoadImm32(T0, imm);
+   OPO.GenAND(Rd, Rn, T0)
+  END
+ END EmitAndImm;
+
+ PROCEDURE EmitOrImm(Rd, Rn: LONGINT; imm: LONGINT);
+ BEGIN
+  IF FitsImm12(imm) THEN
+   OPO.GenORI(Rd, Rn, imm)
+  ELSE
+   OPO.LoadImm32(T0, imm);
+   OPO.GenOR(Rd, Rn, T0)
+  END
+ END EmitOrImm;
+
+ PROCEDURE EmitXorImm(Rd, Rn: LONGINT; imm: LONGINT);
+ BEGIN
+  IF FitsImm12(imm) THEN
+   OPO.GenXORI(Rd, Rn, imm)
+  ELSE
+   OPO.LoadImm32(T0, imm);
+   OPO.GenXOR(Rd, Rn, T0)
+  END
+ END EmitXorImm;
+
+ PROCEDURE EmitLoad(rd, base: LONGINT; disp: LONGINT; size: SHORTINT);
+ (* Load from memory, handling large displacements via T0 *)
+ BEGIN
+  IF FitsImm12(disp) THEN
+   IF size = Bit8 THEN OPO.GenLBU(rd, base, disp)
+   ELSIF size = Bit16 THEN OPO.GenLHU(rd, base, disp)
+   ELSE OPO.GenLW(rd, base, disp)
+   END
+  ELSE
+   OPO.LoadImm32(T0, disp);
+   OPO.GenADD(T0, base, T0);
+   IF size = Bit8 THEN OPO.GenLBU(rd, T0, 0)
+   ELSIF size = Bit16 THEN OPO.GenLHU(rd, T0, 0)
+   ELSE OPO.GenLW(rd, T0, 0)
+   END
+  END
+ END EmitLoad;
+
+ PROCEDURE EmitLoadSigned(rd, base: LONGINT; disp: LONGINT; size: SHORTINT);
+ (* Load from memory with sign extension *)
+ BEGIN
+  IF FitsImm12(disp) THEN
+   IF size = Bit8 THEN OPO.GenLB(rd, base, disp)
+   ELSIF size = Bit16 THEN OPO.GenLH(rd, base, disp)
+   ELSE OPO.GenLW(rd, base, disp)
+   END
+  ELSE
+   OPO.LoadImm32(T0, disp);
+   OPO.GenADD(T0, base, T0);
+   IF size = Bit8 THEN OPO.GenLB(rd, T0, 0)
+   ELSIF size = Bit16 THEN OPO.GenLH(rd, T0, 0)
+   ELSE OPO.GenLW(rd, T0, 0)
+   END
+  END
+ END EmitLoadSigned;
+
+ PROCEDURE EmitStore(rs, base: LONGINT; disp: LONGINT; size: SHORTINT);
+ (* Store to memory, handling large displacements via T0 *)
+ BEGIN
+  IF FitsImm12(disp) THEN
+   IF size = Bit8 THEN OPO.GenSB(rs, base, disp)
+   ELSIF size = Bit16 THEN OPO.GenSH(rs, base, disp)
+   ELSE OPO.GenSW(rs, base, disp)
+   END
+  ELSE
+   OPO.LoadImm32(T0, disp);
+   OPO.GenADD(T0, base, T0);
+   IF size = Bit8 THEN OPO.GenSB(rs, T0, 0)
+   ELSIF size = Bit16 THEN OPO.GenSH(rs, T0, 0)
+   ELSE OPO.GenSW(rs, T0, 0)
+   END
+  END
+ END EmitStore;
+
+ PROCEDURE EmitFLoad(frd, base: LONGINT; disp: LONGINT);
+ (* FLW frd, disp(base) - handling large displacements *)
+ BEGIN
+  IF FitsImm12(disp) THEN
+   OPO.GenFLW(frd, base, disp)
+  ELSE
+   OPO.LoadImm32(T0, disp);
+   OPO.GenADD(T0, base, T0);
+   OPO.GenFLW(frd, T0, 0)
+  END
+ END EmitFLoad;
+
+ PROCEDURE EmitFStore(frs, base: LONGINT; disp: LONGINT);
+ (* FSW frs, disp(base) - handling large displacements *)
+ BEGIN
+  IF FitsImm12(disp) THEN
+   OPO.GenFSW(frs, base, disp)
+  ELSE
+   OPO.LoadImm32(T0, disp);
+   OPO.GenADD(T0, base, T0);
+   OPO.GenFSW(frs, T0, 0)
+  END
+ END EmitFStore;
+
+ PROCEDURE Load(VAR instr: Instruction);
+ (* ld, lea, ldbdw, ldbw, ldwdw, ldbdwu, ldwdwu, ldbwu, getReg, putReg *)
+  VAR
+   mode, size, base, inx, dummy, memBase: SHORTINT;
+   disp, slotOff: LONGINT;
+   op: LONGINT;
+ BEGIN
+  op := instr.op DIV 32;
   IF (op = Neg) OR (op = Not) THEN
-   IF loaded(instr.src1) THEN base := OPIR.Instr[instr.src1].reg
-   ELSE FindLoadReg(instr.src1, base) END;
+   (* Neg/Not instruction whose register was evicted. Re-materialize. *)
+   IF loaded(instr.src1) THEN
+    base := OPIR.Instr[instr.src1].reg
+   ELSE
+    FindLoadReg(instr.src1, base)
+   END;
    dummy := none;
    AssignReg(instr.dest, base, dummy, dummy);
    IF op = Neg THEN
-    OPO.GenDataProcImm(CondAL, OPO.dpRSB, 0, instr.reg, base, 0)
+    OPO.GenSUB(instr.reg, X0, base)
    ELSE
-    OPO.GenDataProcReg(CondAL, OPO.dpMVN, 0, instr.reg, 0, base, ShiftLSL, 0)
+    OPO.GenXORI(instr.reg, base, -1)
    END;
    IF (instr.reg = base) & IsAllocatable(base) THEN
-    IF regTab[base] > none THEN OPIR.Instr[regTab[base]].reg := -2 - base END
+    IF regTab[GPRToReg(base)] > none THEN OPIR.Instr[regTab[GPRToReg(base)]].reg := -2 - base END
    END;
    IF (instr.reg > none) & IsAllocatable(instr.reg) THEN
-    regTab[instr.reg] := instr.dest
-   END;
-   RETURN
-  ELSIF (op = Add) OR (op = Sub) THEN
-   (* Re-compute a displaced binary arithmetic instruction.
-      This can happen when register pressure causes a previously computed
-      Add/Sub result to lose its register via FreeReg/ReleaseReg. *)
-   mode := SHORT((instr.op DIV 8) MOD 4);
-   FindLoadReg(instr.src1, base);
-   dummy := none;
-   IF mode = ImmReg THEN
-    inx := none;
-    AssignReg(instr.dest, base, dummy, dummy);
-    IF op = Add THEN EmitAddImm(CondAL, instr.reg, base, instr.src2)
-    ELSE EmitSubImm(CondAL, instr.reg, base, instr.src2) END
-   ELSE
-    FindLoadReg(instr.src2, inx);
-    AssignReg(instr.dest, base, inx, dummy);
-    IF op = Add THEN OPO.GenADD(CondAL, instr.reg, base, inx)
-    ELSE OPO.GenSUB(CondAL, instr.reg, base, inx) END
-   END;
-   IF (instr.reg = base) & IsAllocatable(base) THEN
-    IF regTab[base] > none THEN OPIR.Instr[regTab[base]].reg := -2 - base END
-   END;
-   IF (instr.reg > none) & IsAllocatable(instr.reg) THEN
-    regTab[instr.reg] := instr.dest
+    regTab[GPRToReg(instr.reg)] := instr.dest
    END;
    RETURN
   END;
   FindMemReg(instr, mode, size, base, inx, disp);
   IF op # PUTreg THEN AssignReg(instr.dest, base, base, inx) END;
-  
-  IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
-   (* Use IP to build the address to prevent overwriting 'inx' 
-      if the allocator reused the index register for instr.reg *)
-   OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
-   IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
-   OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
+  (* RV32: For absolute data references (base=noBase), load the absolute address
+     via LoadImm32 into the destination register, then use it as base.
+     The linker patches the constant pool / LUI+ADDI with the final address.
+     NOTE: Must come before indexed-access code because base=noBase (-1). *)
+  IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+   OPO.EmitAbsLoad(instr.reg, disp, slotOff);
+   AbsAccess(instr.node, slotOff);
    IF inx > none THEN
     IF instr.scale > 0 THEN
-     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
-    ELSE OPO.GenADD(CondAL, IP, IP, inx) END
+     OPO.GenSLLI(T0, inx, instr.scale);
+     OPO.GenADD(instr.reg, instr.reg, T0)
+    ELSE
+     OPO.GenADD(instr.reg, instr.reg, inx)
+    END
    END;
    CASE op OF
     Ld:
-     IF size = Bit8 THEN OPO.GenLDRB(CondAL, instr.reg, IP, 0)
-     ELSIF size = Bit16 THEN OPO.GenLDRH(CondAL, instr.reg, IP, 0)
-     ELSE OPO.GenLDR(CondAL, instr.reg, IP, 0) END
-    | Lea:
-     IF instr.reg # IP THEN OPO.GenMOVReg(CondAL, instr.reg, IP) END
-    | Ldbdw, Ldbw: OPO.GenLDRSB(CondAL, instr.reg, IP, 0)
-    | Ldwdw: OPO.GenLDRSH(CondAL, instr.reg, IP, 0)
-    | Ldbdwu, Ldbwu: OPO.GenLDRB(CondAL, instr.reg, IP, 0)
-    | Ldwdwu: OPO.GenLDRH(CondAL, instr.reg, IP, 0)
-   ELSE HALT(BUG) END;
+     IF size = Bit8 THEN OPO.GenLBU(instr.reg, instr.reg, 0)
+     ELSIF size = Bit16 THEN OPO.GenLHU(instr.reg, instr.reg, 0)
+     ELSE OPO.GenLW(instr.reg, instr.reg, 0)
+     END
+    | Lea: (* Address already in instr.reg *)
+    | Ldbdw, Ldbw: OPO.GenLB(instr.reg, instr.reg, 0)
+    | Ldwdw: OPO.GenLH(instr.reg, instr.reg, 0)
+    | Ldbdwu, Ldbwu: OPO.GenLBU(instr.reg, instr.reg, 0)
+    | Ldwdwu: OPO.GenLHU(instr.reg, instr.reg, 0)
+   ELSE HALT(BUG)
+   END;
    dummy := none;
    DecCheckReg(instr.dest, dummy, base, inx);
    RETURN
   END;
-
-  IF mode IN {MemReg, RegMem} THEN
-   AdjustLargeOffset(base, disp, GetOffsetLimit(op, size))
-  END;
+  (* Indexed memory access: compute base+index*scale into T0 *)
   memBase := base;
   IF inx > none THEN
    IF instr.scale > 0 THEN
-    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
-   ELSE OPO.GenADD(CondAL, IP, base, inx) END;
-   memBase := IP
+    OPO.GenSLLI(T0, inx, instr.scale);
+    OPO.GenADD(T0, base, T0)
+   ELSE
+    OPO.GenADD(T0, base, inx)
+   END;
+   memBase := T0
   END;
   CASE op OF
-   | Ld:
+   Ld:
     IF mode = ImmReg THEN
-     OPO.LoadImm32(CondAL, instr.reg, instr.src2)
+     OPO.LoadImm32(instr.reg, instr.src2)
     ELSIF mode = RegReg THEN
-     IF instr.reg # memBase THEN OPO.GenMOVReg(CondAL, instr.reg, memBase) END
+     IF instr.reg # memBase THEN OPO.GenMOV(instr.reg, memBase) END
     ELSE
-	    IF size = Bit8 THEN OPO.GenLDRB(CondAL, instr.reg, memBase, disp)
-	    ELSIF size = Bit16 THEN OPO.GenLDRH(CondAL, instr.reg, memBase, disp)
-	    ELSE OPO.GenLDR(CondAL, instr.reg, memBase, disp) END
+     EmitLoad(instr.reg, memBase, disp, size)
     END
    | Lea:
     IF disp = 0 THEN
-     IF instr.reg # memBase THEN OPO.GenMOVReg(CondAL, instr.reg, memBase) END
+     IF instr.reg # memBase THEN OPO.GenMOV(instr.reg, memBase) END
     ELSE
-     IF instr.reg # memBase THEN OPO.GenMOVReg(CondAL, instr.reg, memBase) END;
-     EmitAddImm(CondAL, instr.reg, instr.reg, disp)
-    END
+     EmitAddImm(instr.reg, memBase, disp)
+    END;
+    (* On x86, useReg4 maps to ESP so the result naturally goes to the stack pointer.
+       On RV32, useReg4 maps to a4, so we must explicitly update SP. *)
+    IF instr.hint = OPIR.useReg4 THEN OPO.GenMOV(SP, instr.reg) END
    | Ldbdw, Ldbw:
-    IF mode = RegReg THEN OPO.GenSXTB(CondAL, instr.reg, memBase)
-    ELSE OPO.GenLDRSB(CondAL, instr.reg, memBase, disp) END
-   | Ldwdw:
-    IF mode = RegReg THEN OPO.GenSXTH(CondAL, instr.reg, memBase)
-    ELSE OPO.GenLDRSH(CondAL, instr.reg, memBase, disp) END
-   | Ldbdwu, Ldbwu:
-    IF mode = RegReg THEN OPO.GenUXTB(CondAL, instr.reg, memBase)
-    ELSE OPO.GenLDRB(CondAL, instr.reg, memBase, disp) END
-   | Ldwdwu:
-    IF mode = RegReg THEN OPO.GenUXTH(CondAL, instr.reg, memBase)
-    ELSE OPO.GenLDRH(CondAL, instr.reg, memBase, disp) END
-   | PUTreg:
-    IF mode = ImmReg THEN OPO.LoadImm32(CondAL, MapSysReg(instr.hint), instr.src2)
+    IF mode = RegReg THEN
+     OPO.GenSLLI(instr.reg, memBase, 24);
+     OPO.GenSRAI(instr.reg, instr.reg, 24)
     ELSE
-     IF MapSysReg(instr.hint) # base THEN OPO.GenMOVReg(CondAL, MapSysReg(instr.hint), base) END
+     EmitLoadSigned(instr.reg, memBase, disp, Bit8)
     END
-  ELSE HALT(BUG) END;
+   | Ldwdw:
+    IF mode = RegReg THEN
+     OPO.GenSLLI(instr.reg, memBase, 16);
+     OPO.GenSRAI(instr.reg, instr.reg, 16)
+    ELSE
+     EmitLoadSigned(instr.reg, memBase, disp, Bit16)
+    END
+   | Ldbdwu, Ldbwu:
+    IF mode = RegReg THEN
+     EmitAndImm(instr.reg, memBase, 0FFH)
+    ELSE
+     EmitLoad(instr.reg, memBase, disp, Bit8)
+    END
+   | Ldwdwu:
+    IF mode = RegReg THEN
+     OPO.GenSLLI(instr.reg, memBase, 16);
+     OPO.GenSRLI(instr.reg, instr.reg, 16)
+    ELSE
+     EmitLoad(instr.reg, memBase, disp, Bit16)
+    END
+   | PUTreg:
+    IF mode = ImmReg THEN
+     OPO.LoadImm32(SHORT(SHORT(instr.hint)), instr.src2)
+    ELSE
+     IF SHORT(SHORT(instr.hint)) # base THEN
+      OPO.GenMOV(SHORT(SHORT(instr.hint)), base)
+     END
+    END
+  ELSE HALT(BUG)
+  END;
   dummy := none;
   DecCheckReg(instr.dest, dummy, base, inx)
  END Load;
 
  PROCEDURE LoadProc(VAR instr: Instruction);
-  VAR dummy: SHORTINT;
+ (* ldProc, ldXProc: load procedure address *)
+ (* Always emit LUI+ADDI pair (8 bytes) so AddLink offset pc-8 is correct.
+    LoadImm32 may emit only ADDI for small values, breaking the chain. *)
+  VAR dummy: SHORTINT; imm, lo12, hi20: LONGINT;
  BEGIN
   dummy := none;
   AssignReg(instr.dest, dummy, dummy, dummy);
   IF instr.op DIV 32 = LdProc THEN
-   (* Local procedure: emit MOVW/MOVT pair with entry number; linker patches *)
-   OPO.GenMOVW(CondAL, instr.reg, SHORT(instr.src1 MOD 10000H));
-   OPO.GenMOVT(CondAL, instr.reg, SHORT(instr.src1 MOD 10000H));
+   imm := SHORT(instr.src1 MOD 10000H)
+  ELSE (* LdXProc *)
+   imm := -1
+  END;
+  lo12 := imm MOD 1000H;
+  IF lo12 >= 800H THEN lo12 := lo12 - 1000H END;
+  hi20 := (imm - lo12) DIV 1000H;
+  OPO.GenLUI(instr.reg, hi20 MOD 100000H);
+  OPO.GenADDI(instr.reg, instr.reg, lo12);
+  IF instr.op DIV 32 = LdProc THEN
    AddLink(LocProcAssIndex, OPO.pc - 8)
-  ELSE (* LdXProc: imported procedure *)
-   OPO.GenMOVW(CondAL, instr.reg, 0FFFFH);
-   OPO.GenMOVT(CondAL, instr.reg, 0FFFFH);
+  ELSE
    AddLink(SHORT(instr.src1 MOD 10000H), OPO.pc - 8)
   END;
   DecCheckReg(instr.dest, dummy, dummy, dummy)
  END LoadProc;
 
  PROCEDURE Store(VAR instr: Instruction);
-   VAR
-    mode, size, reg, base, inx, memBase: SHORTINT;
-    disp: LONGINT;
-  BEGIN
-   FindMemReg(instr, mode, size, base, inx, disp);
-
-   IF instr.op DIV 32 # GETreg THEN
-    FindLoadReg(instr.dest, reg);
-   ELSE
-    reg := none;
-   END;
-
-   IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
-    OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
-    IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
-    OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
-    IF inx > none THEN
-     IF instr.scale > 0 THEN
-      OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
-     ELSE OPO.GenADD(CondAL, IP, IP, inx) END
-    END;
-    IF instr.op DIV 32 = GETreg THEN
-     (* Translate system register hints to real hardware SP/FP *)
-     IF size = Bit8 THEN OPO.GenSTRB(CondAL, MapSysReg(instr.hint), IP, 0)
-     ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, MapSysReg(instr.hint), IP, 0)
-     ELSE OPO.GenSTR(CondAL, MapSysReg(instr.hint), IP, 0) END
-    ELSE
-     IF size = Bit8 THEN OPO.GenSTRB(CondAL, reg, IP, 0)
-     ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, reg, IP, 0)
-     ELSE OPO.GenSTR(CondAL, reg, IP, 0) END
-    END;
-    DecReg(reg); DecReg(base); DecReg(inx);
-    RETURN
-   END;
-
-   IF mode IN {MemReg, RegMem} THEN
-    AdjustLargeOffset(base, disp, GetOffsetLimit(Sto, size))
-   END;
-   memBase := base;
+ (* store, getReg *)
+  VAR
+   mode, size, reg, base, inx, memBase: SHORTINT;
+   disp, slotOff: LONGINT;
+ BEGIN
+  FindMemReg(instr, mode, size, base, inx, disp);
+  (* RV32: For absolute data references (base=noBase), load address into T0 *)
+  IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+   OPO.EmitAbsLoad(T0, disp, slotOff);
+   AbsAccess(instr.node, slotOff);
    IF inx > none THEN
     IF instr.scale > 0 THEN
-     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
-    ELSE OPO.GenADD(CondAL, IP, base, inx) END;
-    memBase := IP
+     (* Use T1 for shift since T0 holds the address *)
+     OPO.GenSLLI(T1, inx, instr.scale);
+     OPO.GenADD(T0, T0, T1)
+    ELSE
+     OPO.GenADD(T0, T0, inx)
+    END
    END;
    IF instr.op DIV 32 = GETreg THEN
-    (* Translate system register hints to real hardware SP/FP *)
-    IF size = Bit8 THEN OPO.GenSTRB(CondAL, MapSysReg(instr.hint), memBase, disp)
-    ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, MapSysReg(instr.hint), memBase, disp)
-    ELSE OPO.GenSTR(CondAL, MapSysReg(instr.hint), memBase, disp) END
+    OPO.GenMOV(SHORT(SHORT(instr.hint)), T0);
+    reg := none
+   ELSIF ~loaded(instr.dest) & ((OPIR.Instr[instr.dest].op DIV 8) MOD 4 = ImmReg) THEN
+    OPO.LoadImm32(T1, OPIR.Instr[instr.dest].src2);
+    IF size = Bit8 THEN OPO.GenSB(T1, T0, 0)
+    ELSIF size = Bit16 THEN OPO.GenSH(T1, T0, 0)
+    ELSE OPO.GenSW(T1, T0, 0)
+    END;
+    reg := none
    ELSE
-    IF size = Bit8 THEN OPO.GenSTRB(CondAL, reg, memBase, disp)
-    ELSIF size = Bit16 THEN OPO.GenSTRH(CondAL, reg, memBase, disp)
-    ELSE OPO.GenSTR(CondAL, reg, memBase, disp) END
+    FindLoadReg(instr.dest, reg);
+    IF size = Bit8 THEN OPO.GenSB(reg, T0, 0)
+    ELSIF size = Bit16 THEN OPO.GenSH(reg, T0, 0)
+    ELSE OPO.GenSW(reg, T0, 0)
+    END
    END;
+   DecReg(reg); DecReg(base); DecReg(inx);
+   RETURN
+  END;
+  memBase := base;
+  IF inx > none THEN
+   IF instr.scale > 0 THEN
+    OPO.GenSLLI(T0, inx, instr.scale);
+    OPO.GenADD(T0, base, T0)
+   ELSE
+    OPO.GenADD(T0, base, inx)
+   END;
+   memBase := T0
+  END;
+  IF instr.op DIV 32 = GETreg THEN
+   IF SHORT(SHORT(instr.hint)) # memBase THEN
+    OPO.GenMOV(SHORT(SHORT(instr.hint)), memBase)
+   END;
+   reg := none
+  ELSIF (memBase # T0) & ~loaded(instr.dest) & ((OPIR.Instr[instr.dest].op DIV 8) MOD 4 = ImmReg) THEN
+   OPO.LoadImm32(T0, OPIR.Instr[instr.dest].src2);
+   EmitStore(T0, memBase, disp, size);
+   reg := none
+  ELSE
+   FindLoadReg(instr.dest, reg);
+   EmitStore(reg, memBase, disp, size)
+  END;
   DecReg(reg); DecReg(base); DecReg(inx)
  END Store;
 
@@ -1109,12 +1268,13 @@ MODULE OPL; (** non-portable *)
   VAR reg: SHORTINT;
  BEGIN
   IF (instr.op DIV 8) MOD 4 = ImmReg THEN
-   (* Push immediate: load into IP then push *)
-   OPO.LoadImm32(CondAL, IP, instr.src2);
-   OPO.GenSTRPre(CondAL, IP, SP, -4)
+   OPO.LoadImm32(T0, instr.src2);
+   OPO.GenADDI(SP, SP, -4);
+   OPO.GenSW(T0, SP, 0)
   ELSE
    FindLoadReg(instr.src1, reg);
-   OPO.GenSTRPre(CondAL, reg, SP, -4);
+   OPO.GenADDI(SP, SP, -4);
+   OPO.GenSW(reg, SP, 0);
    DecReg(reg)
   END
  END GenPush;
@@ -1125,155 +1285,9 @@ MODULE OPL; (** non-portable *)
  BEGIN
   dummy := none;
   AssignReg(instr.dest, dummy, dummy, dummy);
-  OPO.GenLDRPost(CondAL, instr.reg, SP, 4)
+  OPO.GenLW(instr.reg, SP, 0);
+  OPO.GenADDI(SP, SP, 4)
  END GenPop;
-
-(* ARM32 data processing instructions can only encode 8-bit rotated immediates.
-   These helpers try the immediate encoding first, and fall back to loading
-   the value into IP (R12) scratch register if it doesn't fit. *)
-
-  PROCEDURE EmitAddImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpADD, 0, Rd, Rn, enc)
-  ELSIF OPO.CanEncodeImm(-imm, enc) THEN
-   (* ADD Rd, Rn, -X = SUB Rd, Rn, X; avoids LoadImm32 clobbering IP when Rn=IP *)
-   OPO.GenDataProcImm(cond, OPO.dpSUB, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenADD(cond, Rd, Rn, IP)
-  END
- END EmitAddImm;
-
-  PROCEDURE EmitSubImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpSUB, 0, Rd, Rn, enc)
-  ELSIF OPO.CanEncodeImm(-imm, enc) THEN
-   (* SUB Rd, Rn, -X = ADD Rd, Rn, X; avoids LoadImm32 clobbering IP when Rn=IP *)
-   OPO.GenDataProcImm(cond, OPO.dpADD, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenSUB(cond, Rd, Rn, IP)
-  END
- END EmitSubImm;
-
- PROCEDURE EmitCmpImm(cond: LONGINT; Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpCMP, 1, 0, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenCMPReg(cond, Rn, IP)
-  END
- END EmitCmpImm;
-
- PROCEDURE EmitTstImm(cond: LONGINT; Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpTST, 1, 0, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenTSTReg(cond, Rn, IP)
-  END
- END EmitTstImm;
-
- PROCEDURE EmitAndImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpAND, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenANDReg(cond, Rd, Rn, IP)
-  END
- END EmitAndImm;
-
- PROCEDURE EmitOrrImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpORR, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenORRReg(cond, Rd, Rn, IP)
-  END
- END EmitOrrImm;
-
- PROCEDURE EmitEorImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpEOR, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenEORReg(cond, Rd, Rn, IP)
-  END
- END EmitEorImm;
-
- PROCEDURE EmitRsbImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpRSB, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenRSB(cond, Rd, Rn, IP)
-  END
- END EmitRsbImm;
-
- PROCEDURE AdjustLargeOffset(VAR base: SHORTINT; VAR disp: LONGINT; limit: LONGINT);
- (* If |disp| >= limit, materialize base+disp into IP and reset disp to 0.
-    PRECONDITION: base # IP (guaranteed for local vars where base = FP = R11).
-    This must be called BEFORE the indexed-access code (IF inx > none) so that
-    the index computation naturally incorporates the adjusted base. *)
- BEGIN
-  IF (disp >= limit) OR (disp <= -limit) THEN
-   ASSERT(base # IP); (* base must not be IP; locals always have base=FP=R11 *)
-   EmitAddImm(CondAL, IP, base, disp);
-   base := IP;
-   disp := 0
-  END
- END AdjustLargeOffset;
-
- PROCEDURE GetOffsetLimit(op, size: LONGINT): LONGINT;
- (* Return the maximum absolute offset for the ARM memory instruction that
-    will be used for the given pseudo-opcode and operand size. *)
- BEGIN
-  CASE op OF
-   Ld, Sto:
-    IF size = Bit16 THEN RETURN 256  (* LDRH/STRH: 8-bit split offset *)
-    ELSE RETURN 4096  (* LDR/STR/LDRB/STRB: 12-bit offset *)
-    END
-   | Ldbdw, Ldbw: RETURN 256  (* LDRSB: 8-bit split offset *)
-   | Ldwdw: RETURN 256  (* LDRSH: 8-bit split offset *)
-   | Ldbdwu, Ldbwu: RETURN 4096  (* LDRB: 12-bit offset *)
-   | Ldwdwu: RETURN 256  (* LDRH: 8-bit split offset *)
-   | FLoad, Fild, FStore, Fist: RETURN 1024  (* VLDR/VSTR: 8-bit word-aligned *)
-  ELSE RETURN 4096
-  END
- END GetOffsetLimit;
-
- PROCEDURE EmitBicImm(cond: LONGINT; Rd, Rn, imm: LONGINT);
-  VAR enc: LONGINT;
- BEGIN
-  IF OPO.CanEncodeImm(imm, enc) THEN
-   OPO.GenDataProcImm(cond, OPO.dpBIC, 0, Rd, Rn, enc)
-  ELSE
-   OPO.LoadImm32(cond, IP, imm);
-   OPO.GenBICReg(cond, Rd, Rn, IP)
-  END
- END EmitBicImm;
-
- PROCEDURE EmitMovImm(cond: LONGINT; Rd, imm: LONGINT);
- (* MOV Rd, #imm - handles arbitrary 32-bit values *)
- BEGIN
-  OPO.LoadImm32(cond, Rd, imm)
- END EmitMovImm;
 
 
  PROCEDURE Gen2(VAR instr: Instruction);
@@ -1285,10 +1299,10 @@ MODULE OPL; (** non-portable *)
   dummy := none;
   AssignReg(instr.dest, src, dummy, dummy);
   IF op = Neg THEN
-   (* NEG: RSB Rd, Rs, #0 *)
-   OPO.GenDataProcImm(CondAL, OPO.dpRSB, 0, instr.reg, src, 0)
-  ELSE (* Not: MVN Rd, Rs *)
-   OPO.GenDataProcReg(CondAL, OPO.dpMVN, 0, instr.reg, 0, src, ShiftLSL, 0)
+   (* NEG: SUB Rd, x0, Rs *)
+   OPO.GenSUB(instr.reg, X0, src)
+  ELSE (* Not: XORI Rd, Rs, -1 *)
+   OPO.GenXORI(instr.reg, src, -1)
   END;
   DecCheckReg(instr.dest, src, dummy, dummy)
  END Gen2;
@@ -1328,89 +1342,112 @@ MODULE OPL; (** non-portable *)
    inx := none; disp := noDisp
   END;
   AssignReg(instr.dest, src, base, inx);
-  
+  IF instr.reg # src THEN OPO.GenMOV(instr.reg, src) END;
   CASE op OF
    Add:
-    IF mode = ImmReg THEN EmitAddImm(CondAL, instr.reg, src, instr.src2)
-    ELSE OPO.GenADD(CondAL, instr.reg, src, base) END
+    IF mode = ImmReg THEN EmitAddImm(instr.reg, instr.reg, instr.src2)
+    ELSE OPO.GenADD(instr.reg, instr.reg, base)
+    END
    | Sub:
-    IF mode = ImmReg THEN EmitSubImm(CondAL, instr.reg, src, instr.src2)
-    ELSE OPO.GenSUB(CondAL, instr.reg, src, base) END;
-    IF src = SP THEN spSubPending := TRUE END
+    IF mode = ImmReg THEN EmitSubImm(instr.reg, instr.reg, instr.src2)
+    ELSE OPO.GenSUB(instr.reg, instr.reg, base)
+    END
    | oR:
-    IF mode = ImmReg THEN EmitOrrImm(CondAL, instr.reg, src, instr.src2)
-    ELSE OPO.GenORRReg(CondAL, instr.reg, src, base) END
+    IF mode = ImmReg THEN EmitOrImm(instr.reg, instr.reg, instr.src2)
+    ELSE OPO.GenOR(instr.reg, instr.reg, base)
+    END
    | Xor:
-    IF mode = ImmReg THEN EmitEorImm(CondAL, instr.reg, src, instr.src2)
-    ELSE OPO.GenEORReg(CondAL, instr.reg, src, base) END
+    IF mode = ImmReg THEN EmitXorImm(instr.reg, instr.reg, instr.src2)
+    ELSE OPO.GenXOR(instr.reg, instr.reg, base)
+    END
    | And:
-    IF mode = ImmReg THEN EmitAndImm(CondAL, instr.reg, src, instr.src2)
-    ELSE OPO.GenANDReg(CondAL, instr.reg, src, base) END
+    IF mode = ImmReg THEN EmitAndImm(instr.reg, instr.reg, instr.src2)
+    ELSE OPO.GenAND(instr.reg, instr.reg, base)
+    END
    | Sal:
-    IF mode = ImmReg THEN OPO.GenShiftImm(CondAL, instr.reg, src, ShiftLSL, SHORT(instr.src2))
-    ELSE OPO.GenShiftReg(CondAL, instr.reg, src, ShiftLSL, base) END
+    IF mode = ImmReg THEN OPO.GenSLLI(instr.reg, src, SHORT(instr.src2))
+    ELSE OPO.GenSLL(instr.reg, src, base)
+    END
    | Sar:
-    IF mode = ImmReg THEN OPO.GenShiftImm(CondAL, instr.reg, src, ShiftASR, SHORT(instr.src2))
-    ELSE OPO.GenShiftReg(CondAL, instr.reg, src, ShiftASR, base) END
+    IF mode = ImmReg THEN OPO.GenSRAI(instr.reg, src, SHORT(instr.src2))
+    ELSE OPO.GenSRA(instr.reg, src, base)
+    END
    | Shr:
-    IF mode = ImmReg THEN OPO.GenShiftImm(CondAL, instr.reg, src, ShiftLSR, SHORT(instr.src2))
-    ELSE OPO.GenShiftReg(CondAL, instr.reg, src, ShiftLSR, base) END
+    IF mode = ImmReg THEN OPO.GenSRLI(instr.reg, src, SHORT(instr.src2))
+    ELSE OPO.GenSRL(instr.reg, src, base)
+    END
    | Rol:
+    (* Rotate left: ROL n = (x << n) | (x >> (32-n)) *)
     IF mode = ImmReg THEN
-     OPO.GenShiftImm(CondAL, instr.reg, src, ShiftROR, SHORT((32 - instr.src2) MOD 32))
+     OPO.GenSLLI(T0, src, SHORT(instr.src2 MOD 32));
+     OPO.GenSRLI(instr.reg, src, SHORT((32 - instr.src2) MOD 32));
+     OPO.GenOR(instr.reg, instr.reg, T0)
     ELSE
-     EmitRsbImm(CondAL, IP, base, 32);
-     OPO.GenShiftReg(CondAL, instr.reg, src, ShiftROR, IP)
+     (* ROL by register: T0 = x << base; T1 = 32 - base; instr.reg = x >> T1; OR *)
+     OPO.GenSLL(T0, src, base);
+     OPO.LoadImm32(T1, 32);
+     OPO.GenSUB(T1, T1, base);
+     OPO.GenSRL(instr.reg, src, T1);
+     OPO.GenOR(instr.reg, instr.reg, T0)
     END
    | Bts:
+    (* Bit test and set: reg := reg OR (1 << bit) *)
     IF mode = ImmReg THEN
-     OPO.LoadImm32(CondAL, IP, 1);
-     OPO.GenShiftImm(CondAL, IP, IP, ShiftLSL, SHORT(instr.src2));
-     OPO.GenORRReg(CondAL, instr.reg, src, IP)
+     OPO.LoadImm32(T0, 1);
+     OPO.GenSLLI(T0, T0, SHORT(instr.src2));
+     OPO.GenOR(instr.reg, instr.reg, T0)
     ELSE
-     OPO.LoadImm32(CondAL, IP, 1);
-     OPO.GenShiftReg(CondAL, IP, IP, ShiftLSL, base);
-     OPO.GenORRReg(CondAL, instr.reg, src, IP)
+     OPO.LoadImm32(T0, 1);
+     OPO.GenSLL(T0, T0, base);
+     OPO.GenOR(instr.reg, instr.reg, T0)
     END
    | Btr:
+    (* Bit test and reset: reg := reg AND NOT(1 << bit) *)
     IF mode = ImmReg THEN
-     OPO.LoadImm32(CondAL, IP, 1);
-     OPO.GenShiftImm(CondAL, IP, IP, ShiftLSL, SHORT(instr.src2));
-     OPO.GenBICReg(CondAL, instr.reg, src, IP)
+     OPO.LoadImm32(T0, 1);
+     OPO.GenSLLI(T0, T0, SHORT(instr.src2));
+     OPO.GenXORI(T0, T0, -1); (* NOT T0 *)
+     OPO.GenAND(instr.reg, instr.reg, T0)
     ELSE
-     OPO.LoadImm32(CondAL, IP, 1);
-     OPO.GenShiftReg(CondAL, IP, IP, ShiftLSL, base);
-     OPO.GenBICReg(CondAL, instr.reg, src, IP)
+     OPO.LoadImm32(T0, 1);
+     OPO.GenSLL(T0, T0, base);
+     OPO.GenXORI(T0, T0, -1);
+     OPO.GenAND(instr.reg, instr.reg, T0)
     END
   ELSE HALT(BUG)
   END;
+  (* On x86, useReg4 maps to ESP so arithmetic results go directly to the stack pointer.
+     On RV32, useReg4 maps to a4, so we must explicitly update SP after the computation. *)
+  IF instr.hint = OPIR.useReg4 THEN OPO.GenMOV(SP, instr.reg) END;
   DecCheckReg(instr.dest, src, base, inx)
  END Gen3;
 
  PROCEDURE GenAbs(VAR instr: Instruction);
  (* abs: absolute value *)
+ (* RV32: if x < 0, negate it. Use SRA to get sign, XOR+SUB to negate conditionally. *)
   VAR src, dummy: SHORTINT;
  BEGIN
   FindLoadReg(instr.src1, src);
   dummy := none;
   AssignReg(instr.dest, src, dummy, dummy);
-  IF instr.reg # src THEN OPO.GenMOVReg(CondAL, instr.reg, src) END;
-  (* CMP Rd, #0; RSBLT Rd, Rd, #0 *)
-  EmitCmpImm(CondAL, instr.reg, 0);
-  OPO.GenDataProcImm(CondLT, OPO.dpRSB, 0, instr.reg, instr.reg, 0);
+  IF instr.reg # src THEN OPO.GenMOV(instr.reg, src) END;
+  (* T0 = sign = x >> 31 (all 0s or all 1s) *)
+  OPO.GenSRAI(T0, instr.reg, 31);
+  (* x = (x XOR sign) - sign *)
+  OPO.GenXOR(instr.reg, instr.reg, T0);
+  OPO.GenSUB(instr.reg, instr.reg, T0);
   DecCheckReg(instr.dest, src, dummy, dummy)
  END GenAbs;
 
-  PROCEDURE GenMul(VAR instr: Instruction);
+ PROCEDURE GenMul(VAR instr: Instruction);
  (* mul: integer multiply *)
   VAR src, base, dummy: SHORTINT; mode: LONGINT;
  BEGIN
   mode := (instr.op DIV 8) MOD 4;
   IF mode = ImmReg THEN
    FindLoadReg(instr.src1, src);
-   (* MUL doesn't support immediate; load into IP *)
-   OPO.LoadImm32(CondAL, IP, instr.src2);
-   base := IP
+   OPO.LoadImm32(T0, instr.src2);
+   base := T0
   ELSIF loaded(instr.src2) THEN
    FindReg(instr.src2, base);
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, src)
@@ -1424,12 +1461,13 @@ MODULE OPL; (** non-portable *)
   END;
   dummy := none;
   AssignReg(instr.dest, src, base, dummy);
-  OPO.GenMUL(CondAL, instr.reg, src, base);
+  OPO.GenMUL(instr.reg, src, base);
   DecCheckReg(instr.dest, src, base, dummy)
  END GenMul;
 
  PROCEDURE GenDivMod(VAR instr: Instruction);
- (* div, mod: Oberon floor division/modulo *)
+ (* div, mod: Oberon floor division/modulo
+  RV32 DIV truncates toward zero. Oberon requires floor division. *)
   VAR
    src, base, dummy: SHORTINT;
    mode: LONGINT;
@@ -1439,64 +1477,68 @@ MODULE OPL; (** non-portable *)
   isDiv := instr.op DIV 32 = Div;
   IF mode = ImmReg THEN
    FindLoadReg(instr.src1, src);
-   OPO.LoadImm32(CondAL, IP, instr.src2);
-   base := IP
+   OPO.LoadImm32(T0, instr.src2);
+   base := T0
   ELSIF loaded(instr.src2) THEN
    FindReg(instr.src2, base);
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, src)
-   ELSE FindReg(instr.src1, src) END
+   ELSE FindReg(instr.src1, src)
+   END
   ELSE
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, src)
-   ELSE FindReg(instr.src1, src) END;
+   ELSE FindReg(instr.src1, src)
+   END;
    FindLoadReg(instr.src2, base)
   END;
   dummy := none;
   AssignReg(instr.dest, src, base, dummy);
 
-  IF hasHWDiv THEN
-   OPO.GenPushReg(CondAL, src);   
-   OPO.GenPushReg(CondAL, base);  
-   OPO.GenSDIV(CondAL, instr.reg, src, base);
-   OPO.GenPushReg(CondAL, instr.reg);
-   OPO.GenLDR(CondAL, instr.reg, SP, 0);  
-   OPO.GenLDR(CondAL, IP, SP, 4);         
-   OPO.GenMUL(CondAL, IP, instr.reg, IP); 
-   OPO.GenLDR(CondAL, instr.reg, SP, 8);  
-   OPO.GenSUB(CondAL, IP, instr.reg, IP); 
-   EmitCmpImm(CondAL, IP, 0);             
-   OPO.GenLDR(CondAL, instr.reg, SP, 8);  
-   OPO.GenLDR(CondNE, IP, SP, 4);         
-   OPO.GenEORReg(CondNE, IP, instr.reg, IP); 
-   OPO.GenShiftImm(CondAL, IP, IP, ShiftASR, 31); 
-   OPO.GenLDR(CondAL, instr.reg, SP, 0);           
-   OPO.GenADD(CondAL, instr.reg, instr.reg, IP);   
-   IF ~isDiv THEN
-    OPO.GenLDR(CondAL, IP, SP, 4);                 
-    OPO.GenMUL(CondAL, IP, instr.reg, IP);         
-    OPO.GenLDR(CondAL, instr.reg, SP, 8);          
-    OPO.GenSUB(CondAL, instr.reg, instr.reg, IP)   
-   END;
-   OPO.GenADDImm(CondAL, SP, SP, 12)
-  ELSE
-   (* === Sysfix BL path (fallback) === *)
-   OPO.GenPushReg(CondAL, base);  
-   OPO.GenPushReg(CondAL, src);   
-   OPO.GenBL(CondAL, 0);
-   AddLink(DivModLinkIndex, OPO.pc - 4);
-   IF isDiv THEN
-    IF instr.reg # 0 THEN OPO.GenMOVReg(CondAL, instr.reg, 0) END
-   ELSE
-    IF instr.reg # 1 THEN OPO.GenMOVReg(CondAL, instr.reg, 1) END
-   END;
-   (* Removed OPO.GenADDImm(CondAL, SP, SP, 8).
-      Oberon uses callee-cleanup. DivMod32 pops its own 8 bytes.*)
+  OPO.GenADDI(SP, SP, -4); OPO.GenSW(src, SP, 0);   (* push dividend *)
+  OPO.GenADDI(SP, SP, -4); OPO.GenSW(base, SP, 0);   (* push divisor *)
+
+  OPO.GenDIV(instr.reg, src, base);
+
+  OPO.GenADDI(SP, SP, -4); OPO.GenSW(instr.reg, SP, 0);  (* push quotient *)
+  (* Stack: [quotient(SP+0), divisor(SP+4), dividend(SP+8)] *)
+
+  (* Compute remainder = dividend - quotient * divisor *)
+  OPO.GenLW(instr.reg, SP, 0);   (* quotient *)
+  OPO.GenLW(T0, SP, 4);          (* divisor *)
+  OPO.GenMUL(T0, instr.reg, T0); (* quotient * divisor *)
+  OPO.GenLW(instr.reg, SP, 8);   (* dividend *)
+  OPO.GenSUB(T0, instr.reg, T0); (* T0 = remainder *)
+
+  (* Floor correction: XOR remainder with divisor, check sign *)
+  OPO.GenLW(instr.reg, SP, 4);        (* divisor *)
+  OPO.GenXOR(T0, T0, instr.reg);      (* T0 = remainder XOR divisor *)
+  OPO.GenSRAI(T0, T0, 31);            (* T0 = sign fill (0 or -1) *)
+  EmitAndImm(T0, T0, 1);              (* T0 = correction (0 or 1) *)
+
+  OPO.GenLW(instr.reg, SP, 0);        (* quotient *)
+  OPO.GenSUB(instr.reg, instr.reg, T0); (* corrected quotient *)
+
+  IF ~isDiv THEN
+   (* MOD: result = dividend - corrected_quotient * divisor *)
+   OPO.GenLW(T0, SP, 4);              (* divisor *)
+   OPO.GenMUL(T0, instr.reg, T0);     (* corrected_quotient * divisor *)
+   OPO.GenLW(instr.reg, SP, 8);       (* dividend *)
+   OPO.GenSUB(instr.reg, instr.reg, T0) (* floor mod *)
   END;
+
+  (* Clean up stack: 12 bytes *)
+  OPO.GenADDI(SP, SP, 12);
 
   DecCheckReg(instr.dest, src, base, dummy)
  END GenDivMod;
 
+
+(* RV32 comparison mechanism: Instead of ARM's condition codes (flags),
+   we store comparison operands in T5 (x30) and T6 (x31), then use
+   conditional branch instructions (BEQ/BNE/BLT/BGE/BLTU/BGEU) on T5,T6.
+   OPO.EmitCondBranch handles the mapping from internal cc to branch instruction. *)
+
  PROCEDURE Flags(VAR instr: Instruction);
- (* cmp, bt, test: set condition flags *)
+ (* cmp, bt, test: set comparison registers T5, T6 *)
   VAR
    mode, size, base, inx, reg: SHORTINT;
    disp: LONGINT;
@@ -1527,173 +1569,255 @@ MODULE OPL; (** non-portable *)
    inx := none; disp := noDisp
   END;
   IF op = Cmp THEN
-   IF mode = ImmReg THEN EmitCmpImm(CondAL, reg, instr.src2)
-   ELSE OPO.GenCMPReg(CondAL, reg, base) END
-  ELSIF op = Test THEN
-   IF mode = ImmReg THEN EmitTstImm(CondAL, reg, instr.src2)
-   ELSE OPO.GenTSTReg(CondAL, reg, base) END
-  ELSE (* Bt: bit test - test bit position *)
-   (* Shift bit to MSB and compare natively via scratch register IP.
-      This prevents tmp register clobbering and guarantees correct Carry (CS/CC) flags! *)
+   (* CMP: store operands in T5, T6 for subsequent conditional branch *)
+   OPO.GenMOV(T5, reg);
    IF mode = ImmReg THEN
-    OPO.GenShiftImm(CondAL, IP, reg, ShiftLSL, SHORT(31 - (instr.src2 MOD 32)));
-    OPO.PutWord(0E35C0102H) (* CMP IP, #0x80000000 *)
+    OPO.LoadImm32(T6, instr.src2)
    ELSE
-    EmitRsbImm(CondAL, IP, base, 31);
-    OPO.GenShiftReg(CondAL, IP, reg, ShiftLSL, IP);
-    OPO.PutWord(0E35C0102H) (* CMP IP, #0x80000000 *)
+    OPO.GenMOV(T6, base)
    END
+  ELSIF op = Test THEN
+   (* TEST: T5 = reg AND imm/base, T6 = 0 *)
+   IF mode = ImmReg THEN
+    EmitAndImm(T5, reg, instr.src2)
+   ELSE
+    OPO.GenAND(T5, reg, base)
+   END;
+   OPO.GenMOV(T6, X0)
+  ELSE (* Bt: bit test *)
+   (* BT: test if bit is set. T5 = (reg >> bit) & 1, T6 = 0 *)
+   IF mode = ImmReg THEN
+    OPO.GenSRLI(T5, reg, SHORT(instr.src2));
+    EmitAndImm(T5, T5, 1)
+   ELSE
+    OPO.GenSRL(T5, reg, base);
+    EmitAndImm(T5, T5, 1)
+   END;
+   OPO.GenMOV(T6, X0)
   END;
   DecReg(reg); DecReg(base); DecReg(inx)
  END Flags;
 
  PROCEDURE Setcc(VAR instr: Instruction);
- (* sete, setne, setl, setle, setg, setge, seta, setae, setb, setbe, setc, setnc *)
- (* use conditional MOV to set 0 or 1 *)
-  VAR dummy: SHORTINT; cond: SHORTINT;
+ (* sete..setnc: set register to 0 or 1 based on condition *)
+  VAR dummy: SHORTINT; op: LONGINT;
  BEGIN
   dummy := none;
   AssignReg(instr.dest, dummy, dummy, dummy);
-  (* Map IR setcc opcode to ARM condition code *)
-  CASE instr.op DIV 32 OF
-   Sete:  cond := CondEQ
-   | Setne: cond := CondNE
-   | Setl:  cond := CondLT
-   | Setle: cond := CondLE
-   | Setg:  cond := CondGT
-   | Setge: cond := CondGE
-   | Seta:  cond := CondHI
-   | Setae: cond := CondCS
-   | Setb:  cond := CondCC
-   | Setbe: cond := CondLS
-   | Setc:  cond := CondCS
-   | Setnc: cond := CondCC
+  op := instr.op DIV 32;
+  CASE op OF
+   Sete:
+    OPO.GenSUB(instr.reg, T5, T6);
+    OPO.GenSLTIU(instr.reg, instr.reg, 1)
+   | Setne:
+    OPO.GenSUB(instr.reg, T5, T6);
+    OPO.GenSLTU(instr.reg, X0, instr.reg)
+   | Setl:
+    OPO.GenSLT(instr.reg, T5, T6)
+   | Setle:
+    OPO.GenSLT(instr.reg, T6, T5);
+    OPO.GenXORI(instr.reg, instr.reg, 1)
+   | Setg:
+    OPO.GenSLT(instr.reg, T6, T5)
+   | Setge:
+    OPO.GenSLT(instr.reg, T5, T6);
+    OPO.GenXORI(instr.reg, instr.reg, 1)
+   | Seta:
+    OPO.GenSLTU(instr.reg, T6, T5)
+   | Setae:
+    OPO.GenSLTU(instr.reg, T5, T6);
+    OPO.GenXORI(instr.reg, instr.reg, 1)
+   | Setb:
+    OPO.GenSLTU(instr.reg, T5, T6)
+   | Setbe:
+    OPO.GenSLTU(instr.reg, T6, T5);
+    OPO.GenXORI(instr.reg, instr.reg, 1)
+   | Setc:
+    OPO.GenSLTU(instr.reg, T5, T6)
+   | Setnc:
+    OPO.GenSLTU(instr.reg, T5, T6);
+    OPO.GenXORI(instr.reg, instr.reg, 1)
   ELSE HALT(BUG)
-  END;
-  (* MOV Rd, #0; MOVcond Rd, #1 *)
-  OPO.GenDataProcImm(CondAL, OPO.dpMOV, 0, instr.reg, 0, 0);
-  OPO.GenDataProcImm(cond, OPO.dpMOV, 0, instr.reg, 0, 1)
+  END
  END Setcc;
 
-   PROCEDURE GenRepMovs(VAR instr: Instruction);
- (* repMovs: block memory copy 
-   implement as a loop using LDR/STR or LDRB/STRB 
-  instr.inx = moveSize (Bit8, Bit16, Bit32); instr.hint = 1 for reversed (backward) copy *)
+ PROCEDURE FixupFwdJumps(targetIR: LONGINT);
+ (* Patch all forward jump placeholders targeting IR instruction targetIR.
+    Scans the fixup table and patches each JAL x0 placeholder with the
+    correct offset to the current OPO.pc. *)
+  VAR j: LONGINT;
+ BEGIN
+  j := 0;
+  WHILE j < nofFwdFixups DO
+   IF fwdFixupTarget[j] = targetIR THEN
+    OPO.EmitJALAt(fwdFixupPos[j], X0, OPO.pc - fwdFixupPos[j]);
+    (* Mark as done by setting target to Nil *)
+    fwdFixupTarget[j] := Nil
+   END;
+   INC(j)
+  END
+ END FixupFwdJumps;
+
+ PROCEDURE Gen1(VAR instr: Instruction; instrNr: LONGINT);
+  VAR op, target: LONGINT; cc: LONGINT; reg: SHORTINT;
+ BEGIN
+  op := instr.op DIV 32;
+  IF op = JmpReg THEN
+   (* Indirect jump via register *)
+   FindLoadReg(instr.src2, reg);
+   OPO.GenJALR(X0, reg, 0);
+   DecReg(reg);
+   RETURN
+  END;
+  target := instr.src2;
+  IF op = Jmp THEN
+   IF instrNr >= target THEN
+    (* Backward unconditional jump: target PC is known *)
+    OPO.GenJAL(X0, OPIR.Instr[target].pc - OPO.pc)
+   ELSE
+    (* Forward unconditional jump: emit placeholder, patch later *)
+    IF nofFwdFixups < MaxFwdFixups THEN
+     fwdFixupPos[nofFwdFixups] := OPO.pc;
+     fwdFixupTarget[nofFwdFixups] := target;
+     INC(nofFwdFixups)
+    END;
+    OPO.GenJAL(X0, 0)
+   END
+  ELSE
+   (* Conditional branch: determine condition code *)
+   CASE op OF
+    Je:  cc := ccEQ
+    | Jne: cc := ccNE
+    | Jl:  cc := ccLT
+    | Jle: cc := ccLE
+    | Jg:  cc := ccGT
+    | Jge: cc := ccGE
+    | Ja:  cc := ccHI
+    | Jae: cc := ccHS
+    | Jb:  cc := ccLO
+    | Jbe: cc := ccLS
+    | Jc:  cc := ccCS
+    | Jnc: cc := ccCC
+   ELSE HALT(BUG); cc := ccEQ
+   END;
+   IF instrNr >= target THEN
+    (* Backward conditional branch: target PC is known *)
+    OPO.EmitCondBranch(cc, OPIR.Instr[target].pc - OPO.pc)
+   ELSE
+    (* Forward conditional branch: emit inverted branch + JAL placeholder *)
+    OPO.EmitCondBranch(OPO.InvertCC(cc), 8);
+    IF nofFwdFixups < MaxFwdFixups THEN
+     fwdFixupPos[nofFwdFixups] := OPO.pc;
+     fwdFixupTarget[nofFwdFixups] := target;
+     INC(nofFwdFixups)
+    END;
+    OPO.GenJAL(X0, 0)
+   END
+  END
+ END Gen1;
+
+ PROCEDURE GenRepMovs(VAR instr: Instruction);
+ (* repMovs: block memory copy *)
   VAR dest, src, nofElem: SHORTINT; Lloop: LONGINT;
     step: LONGINT; reverse, stackPush: BOOLEAN;
  BEGIN
-  (* Load all three operands safely using loaded() checks to prevent cascading eviction *)
   IF loaded(instr.dest) THEN FindReg(instr.dest, dest) ELSE FindLoadReg(instr.dest, dest) END;
   IF loaded(instr.src1) THEN FindReg(instr.src1, src) ELSE FindLoadReg(instr.src1, src) END;
   IF loaded(instr.src2) THEN FindReg(instr.src2, nofElem) ELSE FindLoadReg(instr.src2, nofElem) END;
   reverse := instr.hint = 1;
-  (* Determine step size from moveSize *)
   IF instr.inx = Bit32 THEN step := 4
   ELSIF instr.inx = Bit16 THEN step := 2
-  ELSE step := 1 (* Bit8 *)
+  ELSE step := 1
   END;
   IF reverse THEN step := -step END;
-  (* Forward copy to stack (dest=SP) fix.
-     On i386 the front-end does SUB ESP,size then REP MOVSD to [EDI] leaving ESP
-     unchanged.  On ARM the copy loop used post-increment on SP, moving SP past
-     the data.  The callee cleanup (ADD SP,paramSize) then over-corrects SP.
-     Fix: when dest=SP and forward, copy in REVERSE order using pre-decrement
-     stores (STR IP,[SP,#-step]!).  This naturally decrements SP by totalBytes
-     (allocating stack space) and leaves the data in the correct order for the
-     callee to read at [FP+8].  The callee ADD SP,paramSize then correctly
-     restores SP.  We first adjust src to point to the END of the source. *)
   stackPush := ~reverse & (dest = SP);
-  (* Clear spSubPending: GenRepMovs handles SP itself via the stackPush mechanism *)
-  IF spSubPending THEN spSubPending := FALSE END;
   IF stackPush THEN
-   (* Point src past end of source: ADD src, src, nofElem LSL log2(step) *)
    IF step = 4 THEN
-    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, src, src, nofElem, ShiftLSL, 2)
+    OPO.GenSLLI(T0, nofElem, 2);
+    OPO.GenADD(src, src, T0)
    ELSIF step = 2 THEN
-    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, src, src, nofElem, ShiftLSL, 1)
+    OPO.GenSLLI(T0, nofElem, 1);
+    OPO.GenADD(src, src, T0)
    ELSE
-    OPO.GenADD(CondAL, src, src, nofElem)
+    OPO.GenADD(src, src, nofElem)
    END
   END;
-  (* CMP nofElem, #0; BEQ past loop *)
-  EmitCmpImm(CondAL, nofElem, 0);
-  (* Use CondLE (Less/Equal) instead of CondEQ. *)
-  OPO.GenB(CondLE, 12); 
+  OPO.GenBEQ(nofElem, X0, 6*4);
   Lloop := OPO.pc;
   IF stackPush THEN
-   (* Pre-decrement copy: read backward from source end, push onto stack *)
-   OPO.GenLDRPre(CondAL, IP, src, -step);
-   OPO.GenSTRPre(CondAL, IP, dest, -step)
-  ELSIF instr.inx = Bit32 THEN
-   (* Word copy: use LDR/STR post-indexed *)
-   OPO.GenLDRPost(CondAL, IP, src, step);
-   OPO.GenSTRPost(CondAL, IP, dest, step)
-  ELSIF instr.inx = Bit16 THEN
-   (* Halfword copy: use LDRH/STRH post-indexed *)
-   OPO.GenLDRHPost(CondAL, IP, src, step);
-   OPO.GenSTRHPost(CondAL, IP, dest, step)
+   OPO.GenADDI(src, src, -step);
+   OPO.GenADDI(dest, dest, -step);
+   IF (step = 4) OR (step = -4) THEN
+    OPO.GenLW(T0, src, 0); OPO.GenSW(T0, dest, 0)
+   ELSE
+    OPO.GenLBU(T0, src, 0); OPO.GenSB(T0, dest, 0)
+   END
+  ELSIF (ABS(step) = 4) THEN
+   OPO.GenLW(T0, src, 0); OPO.GenSW(T0, dest, 0);
+   OPO.GenADDI(src, src, step); OPO.GenADDI(dest, dest, step)
+  ELSIF (ABS(step) = 2) THEN
+   OPO.GenLHU(T0, src, 0); OPO.GenSH(T0, dest, 0);
+   OPO.GenADDI(src, src, step); OPO.GenADDI(dest, dest, step)
   ELSE
-   (* Byte copy: use LDRB/STRB post-indexed *)
-   OPO.GenLDRBPost(CondAL, IP, src, step);
-   OPO.GenSTRBPost(CondAL, IP, dest, step)
+   OPO.GenLBU(T0, src, 0); OPO.GenSB(T0, dest, 0);
+   OPO.GenADDI(src, src, step); OPO.GenADDI(dest, dest, step)
   END;
-  OPO.GenDataProcImm(CondAL, OPO.dpSUB, 1, nofElem, nofElem, 1);
-  OPO.GenB(CondNE, Lloop - (OPO.pc + 8));
-  IF reverse THEN
-   OPO.GenMOVReg(CondAL, SP, 4)  (* MOV SP, R4 *)
-  END;
+  OPO.GenADDI(nofElem, nofElem, -1);
+  OPO.GenBNE(nofElem, X0, Lloop - OPO.pc);
   DecReg(dest); DecReg(src); DecReg(nofElem)
  END GenRepMovs;
 
  PROCEDURE GenCmpString(VAR instr: Instruction);
  (* cmpString: compare two null-terminated strings *)
-  VAR srcAdr, src2Adr, ch1, ch2: SHORTINT; Lloop, Ldone: LONGINT;
+  VAR srcAdr, src2Adr, ch1, ch2: SHORTINT; Lloop: LONGINT;
  BEGIN
   IF loaded(instr.src2) THEN
    FindReg(instr.src2, src2Adr);
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, srcAdr)
-   ELSE FindReg(instr.src1, srcAdr) END
+   ELSE FindReg(instr.src1, srcAdr)
+   END
   ELSE
    IF ~loaded(instr.src1) THEN FindLoadReg(instr.src1, srcAdr)
-   ELSE FindReg(instr.src1, srcAdr) END;
+   ELSE FindReg(instr.src1, srcAdr)
+   END;
    FindLoadReg(instr.src2, src2Adr)
   END;
   GetReg(ch1); GetReg(ch2);
   Lloop := OPO.pc;
-  OPO.GenLDRBPost(CondAL, ch1, srcAdr, 1);
-  OPO.GenLDRBPost(CondAL, ch2, src2Adr, 1);
-  OPO.GenCMPReg(CondAL, ch1, ch2);
-  
-  OPO.GenB(CondNE, 4); Ldone := OPO.pc - 4;
-  
-  OPO.GenDataProcImm(CondAL, OPO.dpCMP, 1, 0, ch1, 0);
-  OPO.GenB(CondNE, Lloop - (OPO.pc + 8));
-  
+  OPO.GenLBU(ch1, srcAdr, 0);
+  OPO.GenADDI(srcAdr, srcAdr, 1);
+  OPO.GenLBU(ch2, src2Adr, 0);
+  OPO.GenADDI(src2Adr, src2Adr, 1);
+  OPO.GenBNE(ch1, ch2, 2*4);
+  OPO.GenBNE(ch1, X0, Lloop - OPO.pc);
+  OPO.GenMOV(T5, ch1);
+  OPO.GenMOV(T6, ch2);
   FreeReg(ch1); FreeReg(ch2);
   DecReg(srcAdr); DecReg(src2Adr)
  END GenCmpString;
 
-  PROCEDURE GenShort(VAR instr: Instruction);
- (* short: truncate to shorter type with correct sign-extension *)
-  VAR src, dummy: SHORTINT; size: LONGINT;
+ PROCEDURE GenShort(VAR instr: Instruction);
+ (* short: truncate to shorter type *)
+  VAR src: SHORTINT; size: LONGINT;
  BEGIN
-  FindLoadReg(instr.src1, src);
+  FindReg(instr.src1, src);
   size := (instr.op MOD 8) * 8;
-  dummy := none;
-  AssignReg(instr.dest, src, dummy, dummy);
+  ASSERT(LastUse(src));
   IF size = Bit16 THEN
-   OPO.GenSXTH(CondAL, instr.reg, src)
-  ELSE (* Bit8 *)
-   OPO.GenSXTB(CondAL, instr.reg, src)
+   EmitAndImm(src, src, 0FFFFH)
+  ELSE
+   EmitAndImm(src, src, 0FFH)
   END;
-  DecCheckReg(instr.dest, src, dummy, dummy)
+  FreeReg(src);
+  AssignThisReg(instr.dest, src)
  END GenShort;
 
-  PROCEDURE GenPhi(VAR instr: Instruction);
+ PROCEDURE GenPhi(VAR instr: Instruction);
+ (* phi: SSA phi node *)
   VAR src1, src2: SHORTINT;
  BEGIN
   ASSERT((OPIR.Instr[instr.src2].reg >= 0) & (OPIR.Instr[instr.src1].reg # none));
-  IF OPIR.Instr[instr.src1].reg < 0 THEN src1 := (-2 - OPIR.Instr[instr.src1].reg)
+  IF OPIR.Instr[instr.src1].reg < 0 THEN src1 := SHORT(-2 - OPIR.Instr[instr.src1].reg)
   ELSE
    src1 := OPIR.Instr[instr.src1].reg;
    FreeReg(src1)
@@ -1701,485 +1825,551 @@ MODULE OPL; (** non-portable *)
   src2 := OPIR.Instr[instr.src2].reg;
   IF src1 # src2 THEN
    AssignThisReg(instr.src2, src1);
-   OPO.GenMOVReg(CondAL, src1, src2);
-   IF IsAllocatable(src2) THEN regTab[src2] := free END
+   OPO.GenMOV(src1, src2);
+   IF IsAllocatable(src2) THEN regTab[GPRToReg(src2)] := free END
   END
  END GenPhi;
 
  PROCEDURE GenTrap(trapNr: LONGINT);
+ (* Emit a trap: LUI x0,trapNr (NOP encoding trap number) + EBREAK *)
  BEGIN
-  OPO.PutWord(0E7F000F0H + (trapNr MOD 16) + ((trapNr DIV 16) MOD 256) * 256)
+  OPO.GenLUI(X0, trapNr MOD 100000H);
+  OPO.GenEBREAK
  END GenTrap;
 
  PROCEDURE GenTrapCC(VAR instr: Instruction);
-  VAR cond: SHORTINT; op: LONGINT;
+ (* te, tne, tle, ta, tae, to: conditional trap *)
+  VAR cc: LONGINT; op: LONGINT;
  BEGIN
   op := instr.op DIV 32;
   IF op = To THEN
-   (* Unconditional overflow trap *)
-   OPO.GenB(CondVC, 0); (* skip trap if no overflow: target = PC+8 = instr after trap *)
    GenTrap(instr.src2)
   ELSE
    CASE op OF
-    Te:  cond := CondNE  (* trap if equal -> NE means NOT equal, so skip *)
-    | Tne: cond := CondEQ
-    | Tle: cond := CondGT
-    | Ta:  cond := CondLS
-    | Tae: cond := CondCC
-   ELSE HALT(BUG)
+    Te:  cc := ccNE
+    | Tne: cc := ccEQ
+    | Tle: cc := ccGT
+    | Ta:  cc := ccLS
+    | Tae: cc := ccLO
+   ELSE HALT(BUG); cc := ccAL
    END;
-   OPO.GenB(cond, 0); (* skip trap: target = PC+8 = instr after trap *)
+   OPO.EmitCondBranch(cc, 12);
    GenTrap(instr.src2)
   END
  END GenTrapCC;
 
  PROCEDURE FixupAndGenTrap;
  (* Generate trap code for all pending trap fixups *)
-  VAR i, fixuppos, pos, next: LONGINT;
+  VAR i: LONGINT;
  BEGIN
   i := 0;
   WHILE i < nofTrapFixups DO
    IF trapFixupTab[i] # Nil THEN
-    fixuppos := OPO.pc;
-    pos := trapFixupTab[i];
-    REPEAT
-     OPO.GetWord(pos, next);
-     OPO.PutWordAt(pos, fixuppos - (pos + 8)); (* ARM branch offset *)
-     pos := -2 - next - 10000H
-    UNTIL pos = Nil;
     GenTrap(i)
    END;
    INC(i)
   END
  END FixupAndGenTrap;
 
-(* VFP *)
+
+(* RV32F: Single-precision (REAL) uses hardware FPU via F extension.
+   Double-precision (LONGREAL) uses SysFix soft-float calls.
+   The SysFix entries are established in multibootlinker.c. *)
 
  PROCEDURE Fload(VAR instr: Instruction);
+ (* fload, fild: load floating-point value *)
   VAR
-   mode, size, base, inx, memBase: SHORTINT;
-   disp: LONGINT;
-   isSingle: BOOLEAN;
-   freg: SHORTINT;
-  BEGIN
-   FindMemReg(instr, mode, size, base, inx, disp);
-   isSingle := (instr.op MOD 8) = 3; 
+   mode, size, base, inx, dummy: SHORTINT;
+   disp, slotOff: LONGINT;
+   op: LONGINT;
+   hiReg: SHORTINT;
+ BEGIN
+  op := instr.op DIV 32;
+  FindMemReg(instr, mode, size, base, inx, disp);
+  IF IsSinglePrec(instr) & (op = Fild) THEN
+   (* Single-precision integer-to-float: FCVT.S.W *)
    AssignFreg(instr.dest);
-   FindFreg(instr.dest, freg);
-   
-  IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
-   OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
-   IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
-   OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
-   (* Added missing index scale computation for floats *)
-   IF inx > none THEN
+   FindLoadReg(instr.src1, base);
+   OPO.GenFCVTSW(instr.reg, base, 0); (* rm=0: RNE = round nearest even *)
+   DecReg(base)
+  ELSIF IsSinglePrec(instr) THEN
+   (* Single precision: use hardware FPU register *)
+   AssignFreg(instr.dest);
+   IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+    (* Global variable: load address, then FLW *)
+    OPO.EmitAbsLoad(T0, disp, slotOff);
+    AbsAccess(instr.node, slotOff);
+    IF inx > none THEN
+     IF instr.scale > 0 THEN
+      OPO.GenSLLI(T1, inx, instr.scale);
+      OPO.GenADD(T0, T0, T1)
+     ELSE
+      OPO.GenADD(T0, T0, inx)
+     END
+    END;
+    OPO.GenFLW(instr.reg, T0, 0)
+   ELSIF inx > none THEN
     IF instr.scale > 0 THEN
-     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
-    ELSE OPO.GenADD(CondAL, IP, IP, inx) END
-   END;
-   IF instr.op DIV 32 = Fild THEN
-    OPO.GenVLDR(CondAL, 1, 0, IP, 0);
-    IF isSingle THEN OPO.GenVCVTF32S32(CondAL, FregToSreg(freg), 0)
-    ELSE OPO.GenVCVTF64S32(CondAL, freg, 0) END
+     OPO.GenSLLI(T0, inx, instr.scale);
+     OPO.GenADD(T0, base, T0)
+    ELSE
+     OPO.GenADD(T0, base, inx)
+    END;
+    EmitFLoad(instr.reg, T0, disp)
+   ELSIF mode = ImmReg THEN
+    (* Load immediate float: put bits in T0, then FMV.W.X *)
+    OPO.LoadImm32(T0, instr.src2);
+    OPO.GenFMVWX(instr.reg, T0)
    ELSE
-    IF isSingle THEN OPO.GenVLDR(CondAL, 1, FregToSreg(freg), IP, 0)
-    ELSE OPO.GenVLDR(CondAL, 0, freg, IP, 0) END
-   END;
-   DecReg(base); DecReg(inx);
-   RETURN
-  END;
-  
-  AdjustLargeOffset(base, disp, 1024);
-  memBase := base;
-  (* Added missing index scale computation for floats *)
-  IF inx > none THEN
-   IF instr.scale > 0 THEN
-    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
-   ELSE OPO.GenADD(CondAL, IP, base, inx) END;
-   memBase := IP
-  END;
-  
-  IF instr.op DIV 32 = Fild THEN
-   OPO.GenVLDR(CondAL, 1, 0, memBase, disp); 
-   IF isSingle THEN OPO.GenVCVTF32S32(CondAL, FregToSreg(freg), 0)
-   ELSE OPO.GenVCVTF64S32(CondAL, freg, 0) END
+    EmitFLoad(instr.reg, base, disp)
+   END
   ELSE
-   IF isSingle THEN OPO.GenVLDR(CondAL, 1, FregToSreg(freg), memBase, disp)
-   ELSE OPO.GenVLDR(CondAL, 0, freg, memBase, disp) END
+   (* LONGREAL (double-precision) path: values are 8 bytes (lo + hi word) *)
+   dummy := none;
+   AssignReg(instr.dest, base, dummy, dummy);
+   IF op = Fild THEN
+    (* fild double-prec: load integer from memory, call Float64.CvtIF with resAddr *)
+    IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+     OPO.EmitAbsLoad(T0, disp, slotOff);
+     AbsAccess(instr.node, slotOff);
+     OPO.GenLW(T0, T0, 0)
+    ELSE
+     EmitLoad(T0, base, disp, Bit32)
+    END;
+    (* Allocate 16 bytes: 8 params (ival, resAddr) + 8 result area.
+       Oberon convention: last param at lowest address (sp+0). *)
+    OPO.GenADDI(SP, SP, -16);
+    OPO.GenADDI(T1, SP, 8);       (* compute resAddr = sp+8 *)
+    OPO.GenSW(T1, SP, 0);         (* sp+0 = resAddr (2nd/last param) *)
+    OPO.GenSW(T0, SP, 4);         (* sp+4 = ival (1st/first param) *)
+    OPO.GenJAL(RA, 0);
+    AddLink(F64CvtIFLinkIndex, OPO.pc - 4);
+    (* Callee cleans 8 bytes of params; sp now points to result area *)
+    OPO.GenLW(instr.reg, SP, 0);  (* resultLo *)
+    GetReg(hiReg);
+    OPO.GenLW(hiReg, SP, 4);      (* resultHi *)
+    SetLRealHi(instr.reg, hiReg);
+    OPO.GenADDI(SP, SP, 8)        (* clean up result area *)
+   ELSE
+    (* fload double-prec: load both lo and hi words (8 bytes) *)
+    GetReg(hiReg);
+    IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+     OPO.EmitAbsLoad(T0, disp, slotOff);
+     AbsAccess(instr.node, slotOff);
+     OPO.GenLW(instr.reg, T0, 0);  (* lo word *)
+     OPO.GenLW(hiReg, T0, 4)       (* hi word *)
+    ELSE
+     EmitLoad(instr.reg, base, disp, Bit32);       (* lo word *)
+     EmitLoad(hiReg, base, disp + 4, Bit32)         (* hi word *)
+    END;
+    SetLRealHi(instr.reg, hiReg)
+   END
   END;
+  dummy := none;
   DecReg(base); DecReg(inx)
  END Fload;
 
  PROCEDURE Fstore(VAR instr: Instruction);
+ (* fstore, fist: store floating-point value *)
   VAR
-   mode, size, base, inx, memBase, src: SHORTINT;
-   disp: LONGINT;
-   isSingle: BOOLEAN;
-  BEGIN
-   FindMemReg(instr, mode, size, base, inx, disp);
-   isSingle := (instr.op MOD 8) = 3; 
-   FindFreg(instr.dest, src);
-   
-  IF (mode IN {RegMem, MemReg}) & (base = noBase) THEN
-   OPO.GenMOVW(CondAL, IP, disp MOD 10000H);
-   IF ~instr.abs THEN AbsAccess(instr.node, OPO.pc - 4) END;
-   OPO.GenMOVT(CondAL, IP, disp DIV 10000H MOD 10000H);
-   (* Added missing index scale computation for floats *)
-   IF inx > none THEN
+   mode, size, base, inx, freg: SHORTINT;
+   disp, slotOff: LONGINT;
+   op: LONGINT;
+   hiReg: SHORTINT;
+ BEGIN
+  op := instr.op DIV 32;
+  FindMemReg(instr, mode, size, base, inx, disp);
+  IF IsSinglePrec(instr) & (op = Fist) THEN
+   (* Single-precision REAL to integer: FCVT.W.S *)
+   FindFreg(instr.src1, freg);
+   OPO.GenFCVTWS(T0, freg, 1); (* rm=1: RTZ = truncate toward zero *)
+   DecCheckFreg(freg);
+   IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+    OPO.EmitAbsLoad(T1, disp, slotOff);
+    AbsAccess(instr.node, slotOff);
+    OPO.GenSW(T0, T1, 0)
+   ELSE
+    EmitStore(T0, base, disp, Bit32)
+   END
+  ELSIF IsSinglePrec(instr) THEN
+   FindFreg(instr.src1, freg);
+   IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+    OPO.EmitAbsLoad(T0, disp, slotOff);
+    AbsAccess(instr.node, slotOff);
+    IF inx > none THEN
+     IF instr.scale > 0 THEN
+      OPO.GenSLLI(T1, inx, instr.scale);
+      OPO.GenADD(T0, T0, T1)
+     ELSE
+      OPO.GenADD(T0, T0, inx)
+     END
+    END;
+    OPO.GenFSW(freg, T0, 0)
+   ELSIF inx > none THEN
     IF instr.scale > 0 THEN
-     OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, IP, inx, ShiftLSL, instr.scale)
-    ELSE OPO.GenADD(CondAL, IP, IP, inx) END
-   END;
-   IF instr.op DIV 32 = Fist THEN
-    IF isSingle THEN
-     OPO.GenVCVTS32F32(CondAL, 0, FregToSreg(src));
-     OPO.GenVSTR(CondAL, 1, 0, IP, 0)
+     OPO.GenSLLI(T0, inx, instr.scale);
+     OPO.GenADD(T0, base, T0)
     ELSE
-     OPO.GenVCVTS32F64(CondAL, 0, src);
-     OPO.GenVSTR(CondAL, 1, 0, IP, 0)
+     OPO.GenADD(T0, base, inx)
+    END;
+    EmitFStore(freg, T0, disp)
+   ELSE
+    EmitFStore(freg, base, disp)
+   END;
+   DecCheckFreg(freg)
+  ELSE
+   (* LONGREAL (double-precision) path: store both lo and hi words (8 bytes) *)
+   IF op = Fist THEN
+    (* fist double-prec: LONGREAL to integer via Float64.CvtFI *)
+    FindLoadReg(instr.dest, freg);
+    hiReg := GetLRealHi(freg);
+    (* Oberon convention: last param at lowest address (sp+0). *)
+    OPO.GenADDI(SP, SP, -8);
+    IF hiReg > -1 THEN
+     OPO.GenSW(hiReg, SP, 0);  (* sp+0 = hiA (2nd/last param) *)
+     FreeReg(hiReg); SetLRealHi(freg, -1)
+    ELSE OPO.GenSW(X0, SP, 0)  (* sp+0 = hiA = 0 *)
+    END;
+    OPO.GenSW(freg, SP, 4);    (* sp+4 = loA (1st/first param) *)
+    DecReg(freg);
+    OPO.GenJAL(RA, 0);
+    AddLink(F64CvtFILinkIndex, OPO.pc - 4);
+    (* Callee cleans 8 bytes of params. Result in a0 *)
+    IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+     OPO.EmitAbsLoad(T0, disp, slotOff);
+     AbsAccess(instr.node, slotOff);
+     OPO.GenSW(A0, T0, 0)
+    ELSE
+     EmitStore(A0, base, disp, Bit32)
     END
    ELSE
-    IF isSingle THEN OPO.GenVSTR(CondAL, 1, FregToSreg(src), IP, 0)
-    ELSE OPO.GenVSTR(CondAL, 0, src, IP, 0) END
-   END;
-   DecCheckFreg(src);
-   DecReg(base); DecReg(inx);
-   RETURN
-  END;
-  
-  AdjustLargeOffset(base, disp, 1024);
-  memBase := base;
-  (* Added missing index scale computation for floats *)
-  IF inx > none THEN
-   IF instr.scale > 0 THEN
-    OPO.GenDataProcReg(CondAL, OPO.dpADD, 0, IP, base, inx, ShiftLSL, instr.scale)
-   ELSE OPO.GenADD(CondAL, IP, base, inx) END;
-   memBase := IP
-  END;
-  
-  IF instr.op DIV 32 = Fist THEN
-   IF isSingle THEN
-    OPO.GenVCVTS32F32(CondAL, 0, FregToSreg(src)); 
-    OPO.GenVSTR(CondAL, 1, 0, memBase, disp)
-   ELSE
-    OPO.GenVCVTS32F64(CondAL, 0, src); 
-    OPO.GenVSTR(CondAL, 1, 0, memBase, disp)
+    (* fstore double-prec: store both lo and hi words *)
+    FindLoadReg(instr.dest, freg);
+    hiReg := GetLRealHi(freg);
+    IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+     OPO.EmitAbsLoad(T0, disp, slotOff);
+     AbsAccess(instr.node, slotOff);
+     OPO.GenSW(freg, T0, 0);       (* lo word *)
+     IF hiReg > -1 THEN
+      OPO.GenSW(hiReg, T0, 4)      (* hi word *)
+     END
+    ELSE
+     EmitStore(freg, base, disp, Bit32);         (* lo word *)
+     IF hiReg > -1 THEN
+      EmitStore(hiReg, base, disp + 4, Bit32)    (* hi word *)
+     END
+    END;
+    IF hiReg > -1 THEN
+     FreeReg(hiReg); SetLRealHi(freg, -1)
+    END;
+    DecReg(freg)
    END
-  ELSE
-   IF isSingle THEN OPO.GenVSTR(CondAL, 1, FregToSreg(src), memBase, disp)
-   ELSE OPO.GenVSTR(CondAL, 0, src, memBase, disp) END
   END;
-  lastFstoreFreg := src;
-  IF spSubPending THEN
-   OPO.GenMOVReg(CondAL, SP, memBase);
-   spSubPending := FALSE
-  END;
-  DecCheckFreg(src);
   DecReg(base); DecReg(inx)
  END Fstore;
 
  PROCEDURE FloatGen3(VAR instr: Instruction);
-  VAR src1, src2, dst: SHORTINT; isSingle: BOOLEAN; op: LONGINT;
+ (* fadd, fsub, fmul, fdiv *)
+  VAR op: LONGINT; src, src2: SHORTINT;
+    srcHi, src2Hi: SHORTINT;
  BEGIN
   op := instr.op DIV 32;
-  isSingle := (instr.op MOD 8) = 3;
-  FindFreg(instr.src1, src1);
-  FindFreg(instr.src2, src2);
-  AssignFreg(instr.dest);
-  dst := instr.reg; (* use separate variable to avoid clobbering src1 *)
-  IF isSingle THEN
+  IF IsSinglePrec(instr) THEN
+   (* Single precision: use hardware F extension *)
+   FindFreg(instr.src1, src);
+   FindFreg(instr.src2, src2);
+   AssignFreg(instr.dest);
    CASE op OF
-    | Fadd: OPO.GenVADD(CondAL, 1, FregToSreg(dst), FregToSreg(src1), FregToSreg(src2))
-    | Fsub: OPO.GenVSUB(CondAL, 1, FregToSreg(dst), FregToSreg(src1), FregToSreg(src2))
-    | Fmul: OPO.GenVMUL(CondAL, 1, FregToSreg(dst), FregToSreg(src1), FregToSreg(src2))
-    | Fdiv: OPO.GenVDIV(CondAL, 1, FregToSreg(dst), FregToSreg(src1), FregToSreg(src2))
+    Fadd: OPO.GenFADDS(instr.reg, src, src2)
+    | Fsub: OPO.GenFSUBS(instr.reg, src, src2)
+    | Fmul: OPO.GenFMULS(instr.reg, src, src2)
+    | Fdiv: OPO.GenFDIVS(instr.reg, src, src2)
    ELSE HALT(BUG)
-   END
+   END;
+   DecCheckFreg(src); DecCheckFreg(src2)
   ELSE
+   (* LONGREAL binary ops: push 5 words (loA, hiA, loB, hiB, resAddr) for Float64 *)
+   FindLoadReg(instr.src1, src);
+   srcHi := GetLRealHi(src);
+   FindLoadReg(instr.src2, src2);
+   src2Hi := GetLRealHi(src2);
+   (* Allocate 28 bytes: 20 params + 8 result area.
+      Oberon convention: last param at lowest address (sp+0). *)
+   OPO.GenADDI(SP, SP, -28);
+   (* resAddr = sp + 20 (address of result area) *)
+   OPO.GenADDI(T0, SP, 20);
+   OPO.GenSW(T0, SP, 0);           (* sp+0 = resAddr (5th/last param) *)
+   IF src2Hi > -1 THEN
+    OPO.GenSW(src2Hi, SP, 4);      (* sp+4 = hiB (4th param) *)
+    FreeReg(src2Hi); SetLRealHi(src2, -1)
+   ELSE OPO.GenSW(X0, SP, 4)       (* sp+4 = hiB = 0 *)
+   END;
+   OPO.GenSW(src2, SP, 8);         (* sp+8 = loB (3rd param) *)
+   IF srcHi > -1 THEN
+    OPO.GenSW(srcHi, SP, 12);      (* sp+12 = hiA (2nd param) *)
+    FreeReg(srcHi); SetLRealHi(src, -1)
+   ELSE OPO.GenSW(X0, SP, 12)      (* sp+12 = hiA = 0 *)
+   END;
+   OPO.GenSW(src, SP, 16);         (* sp+16 = loA (1st/first param) *)
+   DecReg(src); DecReg(src2);
+   OPO.GenJAL(RA, 0);
    CASE op OF
-    Fadd: OPO.GenVADD(CondAL, 0, dst, src1, src2)
-    | Fsub: OPO.GenVSUB(CondAL, 0, dst, src1, src2)
-    | Fmul: OPO.GenVMUL(CondAL, 0, dst, src1, src2)
-    | Fdiv: OPO.GenVDIV(CondAL, 0, dst, src1, src2)
+    Fadd: AddLink(F64AddLinkIndex, OPO.pc - 4)
+    | Fsub: AddLink(F64SubLinkIndex, OPO.pc - 4)
+    | Fmul: AddLink(F64MulLinkIndex, OPO.pc - 4)
+    | Fdiv: AddLink(F64DivLinkIndex, OPO.pc - 4)
    ELSE HALT(BUG)
-   END
-  END;
-  DecCheckFreg(src1); DecCheckFreg(src2)
+   END;
+   (* Callee cleans 20 bytes of params; sp now points to result area *)
+   AssignThisReg(instr.dest, A0);
+   instr.reg := A0;
+   OPO.GenLW(A0, SP, 0);           (* resultLo *)
+   GetThisReg(A1);
+   OPO.GenLW(A1, SP, 4);           (* resultHi *)
+   SetLRealHi(A0, A1);
+   OPO.GenADDI(SP, SP, 8)          (* clean up result area *)
+  END
  END FloatGen3;
 
  PROCEDURE FloatGen2(VAR instr: Instruction);
-  VAR src: SHORTINT; isSingle: BOOLEAN; op: LONGINT;
+ (* fabs, fchs (negate) *)
+  VAR op: LONGINT; src: SHORTINT;
+      srcHi: SHORTINT;
  BEGIN
   op := instr.op DIV 32;
-  isSingle := (instr.op MOD 8) = 3;
-  FindFreg(instr.src1, src);
-  AssignFreg(instr.dest);
-  IF isSingle THEN
-   IF op = Fabs THEN OPO.GenVABS(CondAL, 1, FregToSreg(instr.reg), FregToSreg(src))
-   ELSE OPO.GenVNEG(CondAL, 1, FregToSreg(instr.reg), FregToSreg(src))
-   END
+  IF IsSinglePrec(instr) THEN
+   FindFreg(instr.src1, src);
+   AssignFreg(instr.dest);
+   IF op = Fabs THEN
+    OPO.GenFSGNJXS(instr.reg, src, src) (* FABS = FSGNJX with same src *)
+   ELSE (* Fchs: negate *)
+    OPO.GenFSGNJNS(instr.reg, src, src) (* FNEG = FSGNJN with same src *)
+   END;
+   DecCheckFreg(src)
   ELSE
-   IF op = Fabs THEN OPO.GenVABS(CondAL, 0, instr.reg, src)
-   ELSE OPO.GenVNEG(CondAL, 0, instr.reg, src)
-   END
-  END;
-  DecCheckFreg(src)
+   (* LONGREAL unary ops: push 3 words (lo, hi, resAddr) for Float64.Neg/Abs *)
+   FindLoadReg(instr.src1, src);
+   srcHi := GetLRealHi(src);
+   (* Allocate 20 bytes: 12 params + 8 result area.
+      Oberon convention: last param at lowest address (sp+0). *)
+   OPO.GenADDI(SP, SP, -20);
+   (* resAddr = sp + 12 (address of result area) *)
+   OPO.GenADDI(T0, SP, 12);
+   OPO.GenSW(T0, SP, 0);           (* sp+0 = resAddr (3rd/last param) *)
+   IF srcHi > -1 THEN
+    OPO.GenSW(srcHi, SP, 4);       (* sp+4 = hi word (2nd param) *)
+    FreeReg(srcHi); SetLRealHi(src, -1)
+   ELSE OPO.GenSW(X0, SP, 4)       (* sp+4 = hi = 0 *)
+   END;
+   OPO.GenSW(src, SP, 8);          (* sp+8 = lo word (1st/first param) *)
+   DecReg(src);
+   IF op = Fabs THEN
+    OPO.GenJAL(RA, 0);
+    AddLink(F64AbsLinkIndex, OPO.pc - 4)
+   ELSE
+    OPO.GenJAL(RA, 0);
+    AddLink(F64NegLinkIndex, OPO.pc - 4)
+   END;
+   (* Callee cleans 12 bytes of params; sp now points to result area *)
+   AssignThisReg(instr.dest, A0);
+   instr.reg := A0;
+   OPO.GenLW(A0, SP, 0);           (* resultLo *)
+   GetThisReg(A1);
+   OPO.GenLW(A1, SP, 4);           (* resultHi *)
+   SetLRealHi(A0, A1);
+   OPO.GenADDI(SP, SP, 8)          (* clean up result area *)
+  END
  END FloatGen2;
 
  PROCEDURE FloatCmp(VAR instr: Instruction);
-  VAR src1, src2: SHORTINT; isSingle: BOOLEAN;
+ (* fcmp: compare floating-point values, result in T5/T6 *)
+  VAR src, src2: SHORTINT;
+      srcHi, src2Hi: SHORTINT;
  BEGIN
-  isSingle := (instr.op MOD 8) = 3;
-  FindFreg(instr.src1, src1);
-  FindFreg(instr.src2, src2);
-  IF isSingle THEN
-   OPO.GenVCMP(CondAL, 1, FregToSreg(src1), FregToSreg(src2))
+  IF IsSinglePrec(instr) THEN
+   FindFreg(instr.src1, src);
+   FindFreg(instr.src2, src2);
+   (* Use FLT.S and FEQ.S to build comparison result in T5, T6 *)
+
+   OPO.GenFLTS(T5, src, src2);    (* T5 = 1 if src < src2 *)
+   OPO.GenFLTS(T6, src2, src);    (* T6 = 1 if src2 < src *)
+   OPO.GenFLTS(T5, src2, src);    (* T5 = 1 if src > src2, 0 otherwise *)
+   OPO.GenFLTS(T6, src, src2);    (* T6 = 1 if src < src2, 0 otherwise *)
+   DecCheckFreg(src); DecCheckFreg(src2)
   ELSE
-   OPO.GenVCMP(CondAL, 0, src1, src2)
-  END;
-  OPO.GenVMRS(CondAL); (* transfer FPSCR flags to APSR *)
-  DecCheckFreg(src1); DecCheckFreg(src2)
+   (* LONGREAL comparison via Float64.Cmp(loA, hiA, loB, hiB): INTEGER *)
+   FindLoadReg(instr.src1, src);
+   srcHi := GetLRealHi(src);
+   FindLoadReg(instr.src2, src2);
+   src2Hi := GetLRealHi(src2);
+   (* Oberon convention: last param at lowest address (sp+0). Callee cleans. *)
+   OPO.GenADDI(SP, SP, -16);
+   IF src2Hi > -1 THEN
+    OPO.GenSW(src2Hi, SP, 0);  (* sp+0 = hiB (4th/last param) *)
+    FreeReg(src2Hi); SetLRealHi(src2, -1)
+   ELSE OPO.GenSW(X0, SP, 0)
+   END;
+   OPO.GenSW(src2, SP, 4);     (* sp+4 = loB (3rd param) *)
+   IF srcHi > -1 THEN
+    OPO.GenSW(srcHi, SP, 8);   (* sp+8 = hiA (2nd param) *)
+    FreeReg(srcHi); SetLRealHi(src, -1)
+   ELSE OPO.GenSW(X0, SP, 8)
+   END;
+   OPO.GenSW(src, SP, 12);     (* sp+12 = loA (1st/first param) *)
+   DecReg(src); DecReg(src2);
+   OPO.GenJAL(RA, 0);
+   AddLink(F64CmpLinkIndex, OPO.pc - 4);
+   OPO.GenSLT(T5, X0, A0);    (* T5 = (0 < a0) = 1 if A > B *)
+   OPO.GenSLTI(T6, A0, 0)     (* T6 = (a0 < 0) = 1 if A < B *)
+  END
  END FloatCmp;
 
  PROCEDURE GenEntier(VAR instr: Instruction);
- (* Use ARMv7 VCVT.S32.F32/F64 (round toward zero)
- then adjust for floor: if negative and not exact, subtract 1 *)
-  VAR src: SHORTINT; isSingle: BOOLEAN; dummy: SHORTINT;
+  VAR src, dummy: SHORTINT; srcIsSingle: BOOLEAN;
+    srcHi: SHORTINT;
  BEGIN
-  isSingle := (OPIR.Instr[instr.src1].op MOD 8) = 3;
-  FindFreg(instr.src1, src);
-  dummy := none;
-  AssignReg(instr.dest, dummy, dummy, dummy);
-  (* VCVT.S32.F32/F64 converts to signed int with truncation (toward zero) *)
-  IF isSingle THEN
-   OPO.GenVCVTS32F32(CondAL, 0, FregToSreg(src)); (* result in S0 *)
-  ELSE
-   OPO.GenVCVTS32F64(CondAL, 0, src); (* result in S0 *)
+  srcIsSingle := FALSE;
+  IF instr.src1 >= 0 THEN
+   srcIsSingle := (OPIR.Instr[instr.src1].op MOD 8) = 3
   END;
-  (* Move from S0 to GPR *)
-  OPO.GenVMOVStoGPR(CondAL, instr.reg, 0);
-  (* Floor adjustment: if source was negative and not exact integer,
-     truncation rounds toward zero (up), but floor rounds down.
-     Convert back to float, compare with original: if different and negative, sub 1 *)
-  DecCheckFreg(src)
- END GenEntier;
-
-(* Control Flow *)
-
- PROCEDURE FixupJcc(label: LONGINT);
- (* Patch forward branch fixup chain *)
-  VAR pos, oldInstr, chainLink: LONGINT;
- BEGIN
-  WHILE label # Nil DO
-   IF OPIR.Instr[label].op = jmp THEN pos := OPIR.Instr[label].pc
-   ELSE pos := OPIR.Instr[label].pc
-   END;
-   OPO.GetWord(pos, oldInstr);
-   (* Extract 24-bit signed offset field (chain link) from lower 24 bits *)
-   chainLink := oldInstr MOD 1000000H;
-   IF chainLink >= 800000H THEN chainLink := chainLink - 1000000H END;
-   (* Patch: keep top 8 bits (cond+opcode), replace 24-bit offset *)
-   OPO.PutWordAt(pos, (oldInstr DIV 1000000H) * 1000000H +
-    ((OPO.pc - (pos + 8)) DIV 4) MOD 1000000H);
-   label := -2 - chainLink - 10000H
-  END
- END FixupJcc;
-
- PROCEDURE Gen1(VAR instr: Instruction; RiscPC: LONGINT);
-  VAR
-   op: LONGINT;
-   reg: SHORTINT;
-   cond: SHORTINT;
-   disp: LONGINT;
- BEGIN
-  op := instr.op DIV 32;
-  IF op = JmpReg THEN
-   FindReg(instr.src2, reg);
-   OPO.GenBX(CondAL, reg);
-   DecReg(reg)
-  ELSIF op = Jmp THEN
-   IF RiscPC >= instr.src2 THEN (* backward jump *)
-    disp := OPIR.Instr[instr.src2].pc - (OPO.pc + 8);
-    OPO.GenB(CondAL, disp)
-   ELSE (* forward jump: emit with fixup chain *)
-    (* Chain link: encode previous .pc value of target label, multiply by 4 to survive GenB's DIV 4 *)
-    OPO.GenB(CondAL, (-2 - OPIR.Instr[instr.src2].pc - 10000H) * 4);
-    OPIR.Instr[instr.src2].pc := RiscPC
-   END
+  IF srcIsSingle THEN
+   (* Single-precision REAL to integer: FCVT.W.S *)
+   FindFreg(instr.src1, src);
+   dummy := none;
+   AssignReg(instr.dest, dummy, dummy, dummy);
+   OPO.GenFCVTWS(instr.reg, src, 1); (* rm=1: RTZ = truncate toward zero *)
+   DecCheckFreg(src)
   ELSE
-   (* Conditional branch *)
-   CASE op OF
-    | Je:  cond := CondEQ
-    | Jne: cond := CondNE
-    | Jl:  cond := CondLT
-    | Jle: cond := CondLE
-    | Jg:  cond := CondGT
-    | Jge: cond := CondGE
-    | Ja:  cond := CondHI
-    | Jae: cond := CondCS
-    | Jb:  cond := CondCC
-    | Jbe: cond := CondLS
-    | Jc:  cond := CondCS
-    | Jnc: cond := CondCC
-   ELSE HALT(BUG)
+   (* Double-precision LONGREAL to integer: call Float64.CvtFI *)
+   FindLoadReg(instr.src1, src);
+   srcHi := GetLRealHi(src);
+   (* Oberon convention: last param at lowest address (sp+0). *)
+   OPO.GenADDI(SP, SP, -8);
+   IF srcHi > -1 THEN
+    OPO.GenSW(srcHi, SP, 0);    (* sp+0 = hiA (2nd/last param) *)
+    FreeReg(srcHi); SetLRealHi(src, -1)
+   ELSE OPO.GenSW(X0, SP, 0)    (* sp+0 = hiA = 0 *)
    END;
-   IF RiscPC >= instr.src2 THEN (* backward jump *)
-    disp := OPIR.Instr[instr.src2].pc - (OPO.pc + 8);
-    OPO.GenB(cond, disp)
-   ELSE (* forward jump: emit with fixup chain *)
-    (* Chain link: encode previous .pc value of target label, multiply by 4 to survive GenB's DIV 4 *)
-    OPO.GenB(cond, (-2 - OPIR.Instr[instr.src2].pc - 10000H) * 4);
-    OPIR.Instr[instr.src2].pc := RiscPC
-   END
+   OPO.GenSW(src, SP, 4);       (* sp+4 = loA (1st/first param) *)
+   DecReg(src);
+   OPO.GenJAL(RA, 0);
+   AddLink(F64CvtFILinkIndex, OPO.pc - 4);
+   (* Callee cleans 8 bytes of params. Result in a0 *)
+   dummy := none;
+   AssignReg(instr.dest, dummy, dummy, dummy);
+   OPO.GenMOV(instr.reg, A0)
   END
- END Gen1;
+ END GenEntier;
+ 
 
- PROCEDURE GenEnter(locSize: LONGINT; locals: OPT.Object; sysflag: SHORTINT);
- (* Procedure prologue:
-     PUSH {FP, LR}
-     MOV  FP, SP
-     SUB  SP, SP, #locSize  (if locSize > 0)
- *)
+ PROCEDURE GenEnter(locSize: LONGINT; scope: OPT.Object; sysflag: SHORTINT);
  BEGIN
-  ASSERT(locSize MOD 4 = 0);
-  OPO.GenPUSH(CondAL, SYSTEM.VAL(LONGINT, {FP, LR}));
-  OPO.GenMOVReg(CondAL, FP, SP);
-  IF locSize # 0 THEN
-   EmitSubImm(CondAL, SP, SP, locSize)
+  OPO.GenADDI(SP, SP, -8);
+  OPO.GenSW(RA, SP, 4);
+  OPO.GenSW(FP, SP, 0);
+  OPO.GenMOV(FP, SP);
+  IF locSize > 0 THEN
+   EmitSubImm(SP, SP, locSize)
   END
  END GenEnter;
 
- PROCEDURE GenLeave(parSize: LONGINT; sysflag: SHORTINT);
- (* Procedure epilogue:
-     MOV  SP, FP
-     POP  {FP, LR}
-     ADD  SP, SP, #parSize  (if parSize > 0)
-     BX   LR
-  *)
- BEGIN
-  OPO.GenMOVReg(CondAL, SP, FP);
-  OPO.GenPOP(CondAL, SYSTEM.VAL(LONGINT, {FP, LR}));
-  IF parSize > 0 THEN
-   EmitAddImm(CondAL, SP, SP, parSize)
-  END;
-  OPO.GenBX(CondAL, LR)
- END GenLeave;
-
  PROCEDURE PushRegs;
- (* Save all currently allocated registers before a nested call *)
-  VAR i: SHORTINT; regSet: SET;
+ (* Save all allocated registers before a nested call *)
+  VAR i: SHORTINT;
  BEGIN
-  IF nofSavedLevel > MaxSaveLevel THEN OPM.err(251)
-  ELSE
-   regSet := {};
-   i := 0;
-   WHILE i < MaxGPRs DO
-    savedRegs[nofSavedLevel].reg[i] := SHORT(regTab[i]);
-    IF (regTab[i] # free) & (regTab[i] # Occupied) THEN
-     IF (regTab[i] >= 0) & (OPIR.Instr[regTab[i]].op DIV 32 >= 1) & (OPIR.Instr[regTab[i]].op DIV 32 <= 7) THEN
-      (* indirect memory load; don't save/restore, mark spilled for reload *)
-      savedRegs[nofSavedLevel].reg[i] := free;
-      OPIR.Instr[regTab[i]].reg := (-2) - i
-     ELSE
-      INCL(regSet, i)
-     END;
-     regTab[i] := free
-    END;
-    INC(i)
+  ASSERT(nofSavedLevel < MaxSaveLevel);
+  i := 0;
+  WHILE i < MaxGPRs DO
+   savedRegs[nofSavedLevel].reg[i] := regTab[i];
+   IF regTab[i] # free THEN
+    (* Push register to stack *)
+    OPO.GenADDI(SP, SP, -4);
+    OPO.GenSW(RegToGPR(i), SP, 0);
+    regTab[i] := free
    END;
-   IF regSet # {} THEN OPO.GenPUSH(CondAL, SYSTEM.VAL(LONGINT, regSet)) END;
-   (* Save VFP registers: save bookkeeping AND emit VPUSH for each in-use D-register *)
-   i := 0;
-   WHILE i < MaxFRegs DO
-    savedRegs[nofSavedLevel].freg[i] := SHORT(fregTab[i]);
-    IF fregTab[i] # free THEN
-     OPO.GenVPUSHD(CondAL, i, 1);  (* VPUSH {Di} *)
-     fregTab[i] := free
-    END;
-    INC(i)
+   INC(i)
+  END;
+  i := 0;
+  WHILE i < MaxFRegs DO
+   savedRegs[nofSavedLevel].freg[i] := fregTab[i];
+   IF fregTab[i] # free THEN
+    (* Push FPU register to stack *)
+    OPO.GenADDI(SP, SP, -4);
+    OPO.GenFSW(i, SP, 0);
+    fregTab[i] := free
    END;
-   INC(nofSavedLevel)
-  END
+   INC(i)
+  END;
+  INC(nofSavedLevel)
  END PushRegs;
 
  PROCEDURE PopRegs(VAR instr: Instruction);
  (* Restore registers after a nested call *)
-  VAR i: SHORTINT; size: LONGINT; regSet: SET; hasResult: BOOLEAN;
+  VAR i: SHORTINT; size: LONGINT; hasResult: BOOLEAN;
  BEGIN
   DEC(nofSavedLevel);
-  IF instr.hint # noHint THEN size := instr.op MOD 8
+  IF instr.hint # noHint THEN size := (instr.op MOD 8) * 8
   ELSE size := -1
   END;
   hasResult := size >= 0;
-  (* Restore VFP registers: VPOP in reverse order of VPUSH *)
+  (* Restore FPU registers in reverse order *)
   i := MaxFRegs - 1;
   WHILE i >= 0 DO
    IF savedRegs[nofSavedLevel].freg[i] # free THEN
-    OPO.GenVPOPD(CondAL, i, 1)  (* VPOP {Di} *)
+    OPO.GenFLW(i, SP, 0);
+    OPO.GenADDI(SP, SP, 4)
    END;
-   DEC(i)
-  END;
-  i := 0;
-  WHILE i < MaxFRegs DO
    fregTab[i] := savedRegs[nofSavedLevel].freg[i];
-   INC(i)
-  END;
-  (* Restore GPRs *)
-  regSet := {};
-  i := MaxGPRs - 1;
-  WHILE i >= 0 DO
-   IF savedRegs[nofSavedLevel].reg[i] # free THEN
-    INCL(regSet, i)
-   END;
    DEC(i)
   END;
-  (* If R0 needs to be restored AND the call returns a result in R0,
-     the POP would clobber the return value. Fix:
-     1. Move return value from R0 to IP (scratch register, callee-saved)
-     2. POP all saved regs normally (R0 gets its old value back)
-     3. Move old R0 value to a free register (preserving the saved value)
-     4. Move return value from IP back to R0 *)
-  (* Only protect R0 for integer results; VFP results are in S0/D0, not R0 *)
-  IF hasResult & ~(size IN {3, 4}) & (R0 IN regSet) THEN
-   OPO.GenMOVReg(CondAL, IP, R0);  (* IP = return value *)
-   OPO.GenPOP(CondAL, SYSTEM.VAL(LONGINT, regSet));  (* restore all saved regs *)
-   (* R0 now has its old saved value. Move it to a free register. *)
-   i := 1;
-   WHILE (i < MaxGPRs) & ~((savedRegs[nofSavedLevel].reg[i] = free) & ~(i IN regSet)) DO INC(i) END;
-   IF i < MaxGPRs THEN
-    OPO.GenMOVReg(CondAL, i, R0);  (* Ri = old R0 value *)
-    savedRegs[nofSavedLevel].reg[i] := savedRegs[nofSavedLevel].reg[R0]
+  (* Restore GPRs in reverse order *)
+  (* If a0 needs to be restored AND call has a result in a0, we must save the result first *)
+  IF hasResult & (savedRegs[nofSavedLevel].reg[GPRToReg(A0)] # free) THEN
+   OPO.GenMOV(T0, A0); (* save return value *)
+   i := MaxGPRs - 1;
+   WHILE i >= 0 DO
+    IF savedRegs[nofSavedLevel].reg[i] # free THEN
+     OPO.GenLW(RegToGPR(i), SP, 0);
+     OPO.GenADDI(SP, SP, 4)
+    END;
+    DEC(i)
    END;
-   OPO.GenMOVReg(CondAL, R0, IP);  (* R0 = return value *)
-   savedRegs[nofSavedLevel].reg[R0] := free
+   (* Move old a0 to a free register *)
+   i := 1;
+   WHILE (i < MaxGPRs) & ~((savedRegs[nofSavedLevel].reg[i] = free) & ~(savedRegs[nofSavedLevel].reg[i] # free)) DO INC(i) END;
+   IF i < MaxGPRs THEN
+    OPO.GenMOV(RegToGPR(i), A0);
+    savedRegs[nofSavedLevel].reg[i] := savedRegs[nofSavedLevel].reg[GPRToReg(A0)]
+   END;
+   OPO.GenMOV(A0, T0); (* restore return value *)
+   savedRegs[nofSavedLevel].reg[GPRToReg(A0)] := free
   ELSE
-   IF regSet # {} THEN OPO.GenPOP(CondAL, SYSTEM.VAL(LONGINT, regSet)) END
+   i := MaxGPRs - 1;
+   WHILE i >= 0 DO
+    IF savedRegs[nofSavedLevel].reg[i] # free THEN
+     OPO.GenLW(RegToGPR(i), SP, 0);
+     OPO.GenADDI(SP, SP, 4)
+    END;
+    DEC(i)
+   END
   END;
   i := 0;
   WHILE i < MaxGPRs DO
    IF savedRegs[nofSavedLevel].reg[i] = free THEN
-    (* nothing to do *)
+    (* nothing *)
    ELSIF regTab[i] = free THEN
     regTab[i] := savedRegs[nofSavedLevel].reg[i];
-    IF regTab[i] >= 0 THEN OPIR.Instr[regTab[i]].reg := i END
+    IF regTab[i] >= 0 THEN OPIR.Instr[regTab[i]].reg := RegToGPR(i) END
    END;
    INC(i)
   END;
   (* Set result register *)
-  IF (size = 3) OR (size = 4) THEN
-   (* VFP result: callee returned in S0 (REAL) or D0 (LONGREAL) *)
-   AssignFreg(instr.dest);
-   FindFreg(instr.dest, i);
-   IF i # 0 THEN
-    IF size = 3 THEN
-     OPO.GenVMOVF(CondAL, 1, FregToSreg(i), 0)  (* VMOV Sd, S0 *)
-    ELSE
-     OPO.GenVMOVF(CondAL, 0, i, 0)               (* VMOV Dd, D0 *)
-    END
-   END
-  ELSIF size >= 0 THEN
-   (* Integer result in R0 *)
-   regTab[R0] := instr.dest; instr.reg := R0
+  IF size = Bit8 THEN
+   regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0
+  ELSIF (size = Bit16) OR (size = Bit32) THEN
+   regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0
+  ELSIF size = Bit64 THEN
+   regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0
   END
  END PopRegs;
 
@@ -2207,29 +2397,20 @@ MODULE OPL; (** non-portable *)
    OPO.PutConsDWord(from, val);
    from := from + 4
   END;
-  link[0].offset := instr.src1
+  link[0].offset := SHORT(instr.src1)
  END FixupCaseTab;
 
- PROCEDURE EncodeFixup(i: LONGINT);
- (* Convert forward local procedure call chain from IR-index-based to machine-code-address-based.
-    The BL instructions contain chain link values in their lower 24 bits (pre-multiplied by 4
-     to survive GenBL's DIV 4). We extract these, convert IR indices to machine code addresses,
-    and re-encode them (with *4 compensation). *)
-  VAR L, L1, oldInstr, chainVal: LONGINT; node: OPT.Node;
+  PROCEDURE EncodeFixup(i: LONGINT);
+  VAR L, L1, chainVal: LONGINT; node: OPT.Node;
  BEGIN
   node := OPIR.Instr[i].node;
   node.left.obj.linkadr := -2 - OPIR.Instr[i].pc - 10000H;
   L := i;
   WHILE L > Nil DO
-   OPO.GetWord(OPIR.Instr[L].pc, oldInstr);
-   (* Extract 24-bit chain value from BL instruction *)
-   chainVal := oldInstr MOD 1000000H;
-   IF chainVal >= 800000H THEN chainVal := chainVal - 1000000H END;
+   OPO.ExtractChainVal(OPIR.Instr[L].pc, chainVal);
    IF (chainVal > -10000H) & (-2 - chainVal > Nil) THEN
     L1 := -2 - chainVal;
-    (* Re-encode with machine code address, pre-multiply by 4 for GenBL's DIV 4 *)
-    OPO.PutWordAt(OPIR.Instr[L].pc, (oldInstr DIV 1000000H) * 1000000H +
-     ((-2 - OPIR.Instr[L1].pc - 10000H) MOD 1000000H))
+    OPO.EmitChainJALAt(OPIR.Instr[L].pc, RA, (-2 - OPIR.Instr[L1].pc - 10000H))
    ELSE
     L1 := chainVal
    END;
@@ -2259,20 +2440,18 @@ MODULE OPL; (** non-portable *)
   END
  END GenAsm;
 
- PROCEDURE FixupLocalProcCall*(proc: OPT.Object);
+  PROCEDURE FixupLocalProcCall*(proc: OPT.Object);
  (* Patch all forward calls to a local procedure now that its address is known *)
-  VAR L, oldInstr, chainLink, entryNr: LONGINT;
+ (* RV32: Forward calls use JAL with chain link in raw bits[31:12].
+    We walk the chain and patch each JAL with the correct real offset. *)
+  VAR L, chainLink, entryNr: LONGINT;
  BEGIN
   IF (proc.linkadr < 0) & ~(proc.mode IN {TProc, Typ}) THEN
    L := -2 - proc.linkadr - 10000H;
    WHILE L > Nil DO
-    OPO.GetWord(L, oldInstr);
-    (* Extract 24-bit signed offset field (chain link) from lower 24 bits *)
-    chainLink := oldInstr MOD 1000000H;
-    IF chainLink >= 800000H THEN chainLink := chainLink - 1000000H END;
-    (* Patch BL instruction: keep top 8 bits (cond+opcode), replace 24-bit offset *)
-    OPO.PutWordAt(L, (oldInstr DIV 1000000H) * 1000000H +
-     ((OPO.pc - (L + 8)) DIV 4) MOD 1000000H);
+    OPO.ExtractChainVal(L, chainLink);
+    (* Patch JAL with correct offset to procedure entry (real J-type encoding) *)
+    OPO.EmitJALAt(L, RA, OPO.pc - L);
     L := -2 - chainLink - 10000H
    END
   END;
@@ -2281,11 +2460,12 @@ MODULE OPL; (** non-portable *)
    IF proc.mode IN {TProc, Typ} THEN entryNr := proc.adr MOD 10000H
    ELSE entryNr := proc.adr
    END;
-   entry[entryNr] := SHORT(OPO.pc DIV 4)
+   IF OPO.pc > 32767 THEN entry[entryNr] := SHORT(OPO.pc - 65536)
+   ELSE entry[entryNr] := SHORT(OPO.pc)
+   END
   END
  END FixupLocalProcCall;
 
-(* Object File Output *)
 
  PROCEDURE GenCode*(pSize: INTEGER);
   VAR
@@ -2328,13 +2508,14 @@ MODULE OPL; (** non-portable *)
    fregTab[i] := free; INC(i)
   END;
   RegErr := FALSE;
+  nofFwdFixups := 0;
   i := 0;
   WHILE ~OPO.CodeErr & ~RegErr & (i < pSize) DO
    node := OPIR.Instr[i].node;
-   FixupJcc(OPIR.Instr[i].pc);
+   FixupFwdJumps(i);
    OPIR.Instr[i].pc := OPO.pc;
    op := OPIR.Instr[i].op DIV 32;
-   IF op > 0 THEN (* skip dead code *)
+   IF op > 0 THEN
     CASE op OF
      NewStat:
       OPM.errpos := OPIR.Instr[i].src1;
@@ -2373,86 +2554,54 @@ MODULE OPL; (** non-portable *)
       node := OPIR.Instr[i].node;
       obj := node.left.obj;
       IF obj.mode = CProc THEN
-       HALT(99) (* code procedures not supported *)
-      ELSIF OPIR.Instr[i].src2 >= 0 THEN (* backward call *)
-       OPO.GenBL(CondAL, OPIR.Instr[i].src2 - (OPO.pc + 8))
-      ELSE (* forward call *)
-       (* Pre-multiply by 4 to compensate for GenBL's DIV 4 *)
-       OPO.GenBL(CondAL, OPIR.Instr[i].src2 * 4);
+       HALT(99)
+      ELSIF OPIR.Instr[i].src2 >= 0 THEN
+       (* Backward call: JAL ra, offset *)
+       OPO.GenJAL(RA, OPIR.Instr[i].src2 - OPO.pc)
+      ELSE
+       (* Forward call: JAL with chain link in raw bits, no J-type scrambling *)
+       OPO.EmitChainJAL(RA, OPIR.Instr[i].src2);
        IF -2 - node.left.obj.linkadr = i THEN
         EncodeFixup(i)
        END
       END
      | Xcall:
-      (* External call: BL with fixup *)
-      OPO.GenBL(CondAL, 0);
+      (* External call: JAL with fixup for linker *)
+      OPO.GenJAL(RA, 0);
       AddLink(OPIR.Instr[i].src2 DIV 10000H, OPIR.Instr[i].pc)
      | CallReg:
       FindReg(OPIR.Instr[i].src2, reg);
-      (* Prevent jumping to the Reset Vector on NIL pointers *)
-      EmitCmpImm(CondAL, reg, 0);
-      OPO.GenB(CondNE, 0);   (* If NOT NULL, skip the Trap instruction *)
-      GenTrap(3);            (* TRAP 3: FuncTrap (Call of NIL procedure) *)
-      OPO.GenBLX(CondAL, reg);
+      OPO.GenJALR(RA, reg, 0);
       DecReg(reg)
      | PushReg:
-      (* pushReg: save registers before call *)
       PushRegs
      | PopReg:
-      (* popReg: restore registers after call *)
       PopRegs(OPIR.Instr[i])
      | Ret:
-      (* ret parSize: return from procedure.
-       * The Leave IR instruction already emitted MOV SP,FP + POP {FP,LR}.
-       * Ret only needs parameter cleanup and the actual return. *)
+      (* ret parSize: callee cleans parameters and returns.
+         The Leave instruction already restored FP and RA.
+         Ret adds parSize to SP and returns via JALR x0, ra, 0. *)
       IF OPIR.Instr[i].src2 > 0 THEN
-       EmitAddImm(CondAL, SP, SP, OPIR.Instr[i].src2)
+       EmitAddImm(SP, SP, OPIR.Instr[i].src2)
       END;
-      OPO.GenBX(CondAL, LR)
+      OPO.GenJALR(X0, RA, 0)
      | Enter:
-      (* enter locSize: procedure prologue *)
       IF OPIR.map # NIL THEN MarkPos END;
       IF node # NIL THEN
        list := node.obj.scope.scope;
-       sysflag := node.obj.sysflag;
-       (* Track return type for VFP return value copy at Leave time *)
-       IF (node.obj.typ # NIL) & ((node.obj.typ.form = Real) OR (node.obj.typ.form = LReal)) THEN
-        currentProcRetForm := node.obj.typ.form
-       ELSE
-        currentProcRetForm := 0
-       END
+       sysflag := node.obj.sysflag
       ELSE
        list := NIL;
-       sysflag := 0;
-       currentProcRetForm := 0
+       sysflag := 0
       END;
-      lastFstoreFreg := -1;
       GenEnter(OPIR.Instr[i].src2, list, sysflag)
      | Leave:
-      (* leave: procedure epilogue (without ret) *)
-      (* If function returns REAL or LONGREAL, copy VFP result to S0/D0.
-         Check fregTab for still-allocated register first (direct return path),
-         then fall back to lastFstoreFreg (store-to-local then return path). *)
-      IF currentProcRetForm = Real THEN
-       k := 1;
-       WHILE (k < MaxFRegs) & (fregTab[k] = free) DO INC(k) END;
-       IF k < MaxFRegs THEN
-        OPO.GenVMOVF(CondAL, 1, 0, FregToSreg(SHORT(SHORT(k))))
-       ELSIF lastFstoreFreg > 0 THEN
-        OPO.GenVMOVF(CondAL, 1, 0, FregToSreg(lastFstoreFreg))
-       END
-      ELSIF currentProcRetForm = LReal THEN
-       k := 1;
-       WHILE (k < MaxFRegs) & (fregTab[k] = free) DO INC(k) END;
-       IF k < MaxFRegs THEN
-        OPO.GenVMOVF(CondAL, 0, 0, SHORT(SHORT(k)))
-       ELSIF lastFstoreFreg > 0 THEN
-        OPO.GenVMOVF(CondAL, 0, 0, lastFstoreFreg)
-       END
-      END;
-      currentProcRetForm := 0; lastFstoreFreg := -1;
-      OPO.GenMOVReg(CondAL, SP, FP);
-      OPO.GenPOP(CondAL, SYSTEM.VAL(LONGINT, {FP, LR}))
+      (* leave: procedure epilogue (without ret)
+         RV32: MV sp, s0; LW s0, 0(sp); LW ra, 4(sp); ADDI sp, sp, 8 *)
+      OPO.GenMOV(SP, FP);
+      OPO.GenLW(FP, SP, 0);
+      OPO.GenLW(RA, SP, 4);
+      OPO.GenADDI(SP, SP, 8)
      | RepMovs:
       GenRepMovs(OPIR.Instr[i])
      | CmpString:
@@ -2466,24 +2615,22 @@ MODULE OPL; (** non-portable *)
      | Entier:
       GenEntier(OPIR.Instr[i])
      | Cli:
-      (* cli: disable interrupts - CPSID i *)
-      OPO.PutWord(0F10C0080H) (* CPSID i *)
+      (* cli: disable interrupts - not applicable on bare-metal RV32 without specific CSR *)
+      OPO.GenNOP
      | Sti:
-      (* sti: enable interrupts - CPSIE i *)
-      OPO.PutWord(0F1080080H) (* CPSIE i *)
+      (* sti: enable interrupts *)
+      OPO.GenNOP
      | In, Out:
-      (* No I/O port instructions on ARM32 *)
       OPM.err(200)
      | Assembler:
       GenAsm(OPIR.Instr[i])
      | Clear:
-      (* clear: zero a memory region *)
-      (* Handled by repMovs with zero source *)
+      (* clear: handled by repMovs with zero source *)
      | Std:
-      (* std: set direction flag - no equivalent on ARM32 *)
+      (* std: set direction flag - no equivalent *)
      | Dmb:
-      (* dmb: memory barrier - DMB ISH *)
-      OPO.GenDMBISH
+      (* dmb: memory barrier - FENCE *)
+      OPO.GenFENCE
      | FLoad, Fild:
       Fload(OPIR.Instr[i])
      | FStore, Fist:
@@ -2497,15 +2644,16 @@ MODULE OPL; (** non-portable *)
      | Case:
       FixupCaseTab(OPIR.Instr[i])
      | Cld:
-      (* cld: clear direction flag - no equivalent on ARM32 *)
+      (* cld: clear direction flag - no equivalent *)
     ELSE
-     (* Unknown opcode - skip *)
+     (* Unknown opcode *)
     END
    END;
    INC(i)
   END;
   FixupAndGenTrap
  END GenCode;
+
 
  PROCEDURE OutRefPoint*(proc: OPT.Object);
  VAR obj: OPT.Object; n: LONGINT;
@@ -2726,7 +2874,7 @@ MODULE OPL; (** non-portable *)
      OPT.FPrintObj(obj);
      OPM.ObjWNum(obj.fp); OPM.ObjWString(obj.name);
      IF obj.mode = Var THEN OPM.ObjWNum(obj.adr DIV 10000H)
-     ELSIF obj.mode = XProc THEN OPM.ObjWNum(link[obj.adr DIV 10000H].offset DIV 4 + EUProcFlag)
+     ELSIF obj.mode = XProc THEN OPM.ObjWNum(LSW(link[obj.adr DIV 10000H].offset) + EUProcFlag)
      ELSE OPM.ObjW(0X)
      END;
      IF (obj.mode = Typ) OR (obj.mode = Var) THEN
@@ -2855,24 +3003,15 @@ MODULE OPL; (** non-portable *)
    INC(i)
   END;
   i := 0;
-  (* header block *)
-  (* NOTE: the uint16 code size is no longer measured in bytes, but in words, because
-     in ARMv7 each instruction is a 32 bit value which causes programs to be ~ 1.5 times
-     the size of i386, so some of the large Oberon system files (Objects, etc.) exceed
-     the uint16 size. We avoid this limitation by counting instructions instead of bytes.
-     multibootlinker.c, objdump.c and Modules.Mod have been updated accordingly.
-     2026-03-13 me@rochus-keller.ch *)
   OPM.ObjWInt(nofEntries); OPM.ObjWInt(nofcmds);
   IF nofptrs > MAX(INTEGER) THEN OPM.err(222) END;
   OPM.ObjWInt(SHORT(nofptrs)); OPM.ObjWInt(nofrecs);
   OPM.ObjWInt(nofImp);
   OPM.ObjWInt(nofVarCons); OPM.ObjWInt(nofLinks - linkCorrection);
-  OPM.ObjWBytes(OPO.dsize, 4); OPM.ObjWInt(SHORT(OPO.csize)); OPM.ObjWInt(SHORT(OPO.pc DIV 4));
+  OPM.ObjWBytes(OPO.dsize, 4); OPM.ObjWInt(SHORT(OPO.csize)); OPM.ObjWInt(SHORT(OPO.pc));
   WriteName(modName);
-  (* entry block *)
   OPM.ObjW(EntryTag);
   i := 0; WHILE i < nofEntries DO OPM.ObjWInt(entry[i]); INC(i) END;
-  (* command block *)
   OPM.ObjW(commandTag);
   i := 0;
   WHILE i < nofcmds DO
@@ -2881,11 +3020,9 @@ MODULE OPL; (** non-portable *)
    WriteName(obj.name); OPM.ObjWInt(entry[obj.adr MOD 10000H]);
    INC(i)
   END;
-  (* pointer block *)
   OPM.ObjW(pointerTag);
   i := 0;
   WHILE i < nofptrs DO OPM.ObjWBytes(ptrTab[i], 4); INC(i) END;
-  (* import block *)
   OPM.ObjW(importTag);
   i := 1;
   WHILE i < OPT.nofmod DO
@@ -2893,7 +3030,6 @@ MODULE OPL; (** non-portable *)
    IF obj.used THEN WriteName(obj.name) END;
    INC(i)
   END;
-  (* VarConsLink block *)
   OPM.ObjW(VarConsLinkTag);
   i := 0;
   WHILE i < nofVarCons DO
@@ -2903,32 +3039,25 @@ MODULE OPL; (** non-portable *)
    WHILE k # noEntry DO OPM.ObjWInt(varConsTab[k].offset); k := varConsTab[k].next END;
    INC(i)
   END;
-  (* link block *)
   OPM.ObjW(LinkTag);
   i := 0;
   WHILE i < nofLinks DO
    IF (link[i].offset # Nil) & (link[i].mod <= 0) THEN
     OPM.ObjW(CHR(modMap[link[i].mod])); OPM.ObjW(CHR(link[i].entry));
-    IF link[i].entry = CaseTableEntryNr THEN OPM.ObjWInt(SHORT(link[i].offset))
-    ELSE OPM.ObjWInt(SHORT(link[i].offset DIV 4))
-    END
+    OPM.ObjWInt(link[i].offset)
    END;
    INC(i)
   END;
-  (* data block *)
   OPM.ObjW(DataTag);
   i := 0; WHILE i < OPO.csize DO OPM.ObjW(OPO.constant[i]); INC(i) END;
-  (* export block *)
   OPM.ObjW(ExportTag);
   pos := OPM.ObjAllocInt();
   nofExp := 0; nofStr := 0; OPT.modNo := 0;
   exppos := 0;
   Export(OPT.topScope.right, nofExp);
   OPM.ObjW(EUEnd); OPM.ObjFillInt(pos, nofExp);
-  (* code block *)
   OPM.ObjW(CodeTag);
   i := 0; WHILE i < OPO.pc DO OPM.ObjW(OPO.code[i]); INC(i) END;
-  (* use block *)
   OPM.ObjW(UseTag);
   i := 1;
   WHILE i < OPT.nofmod DO
@@ -2941,7 +3070,6 @@ MODULE OPL; (** non-portable *)
    INC(i)
   END;
   OPM.ObjW(EUEnd);
-  (* type block *)
   OPM.ObjW(TypeTag);
   i := 0;
   WHILE i < nofrecs DO
@@ -2986,7 +3114,6 @@ MODULE OPL; (** non-portable *)
    WHILE k < nofptrs DO OPM.ObjWBytes(ptrTab[k], 4); INC(k) END;
    INC(i)
   END;
-  (* ref block written in OPM.CloseRefObj *)
   OPM.CloseObj
  END OutCode;
 
