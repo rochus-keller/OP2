@@ -56,7 +56,7 @@ enum {
     LockSF = 6,         // "lock", "AosActive.Lock"
     UnlockSF = 7,       // "unlock", "AosActive.Unlock"
     divmodSF = 8,       // "divmod", "DivSupport.DivMod32"
-    /* 9 reserved */
+    newProtRecSF = 9,   // "newprot", "AosHeap.NewProtRec" (PROVISORIC: OP2 workaround)
     copyarraySF = 10,
     CurProcSF = 11,     // "", ""
     commandSF = 12,     // "command", ""
@@ -174,7 +174,8 @@ struct TypeDesc {
     int32_t nofMethods;
     int32_t nofNewMethods;
     int32_t nofPtrs;
-    int32_t tdAdr;
+    int32_t tdAdr;       /* address of the TD center (recSize field - 4) */
+    int32_t blockAdr;    /* address of the RecBlk data start (blockStart + 4) = TypeDesc pointer */
     int32_t tdEntry;
     int32_t tdSize;
     int32_t padSize;
@@ -757,6 +758,12 @@ static void initialise(void) {
     init_sysfix(LockSF, "lock", "AosActive", "Lock", true);
     init_sysfix(UnlockSF, "unlock", "AosActive", "Unlock", true);
     init_sysfix(divmodSF, "divmod", "DivSupport", "DivMod32", true);
+    /* PROVISORIC: OP2 v2.3.7 generates kernel call 253 (NewRec) for ALL
+     * NEW operations, including protected/active objects.  The AOS runtime
+     * expects NewProtRec for those.  We resolve NewProtRec here and use a
+     * post-fixup pass (patch_newrec_for_active_objects) to redirect the
+     * specific calls that precede CreateProcess (kernel 250). */
+    init_sysfix(newProtRecSF, "newprot", "AosHeap", "NewProtRec", true);
 
     /* Future soft-float64 sysfixes (unused by ARM32 VFPv3 backend, for RV32IMAFC) */
     init_sysfix(f64addSF, "f64add", "Float64", "Add", true);
@@ -886,7 +893,7 @@ static void i386_PatchImageHeader(FILE *out, int32_t base, int32_t entry,
 
 static bool i386_PatchMultibootHeader(FILE *out, int32_t base, int32_t entry, int32_t size) {
     uint32_t magic = 0x1BADB002;
-    uint32_t flags = 0x00010000; /* bit 16: raw binary, use provided addresses */
+    uint32_t flags = 0x00010002; /* bit 16: raw binary, use provided addresses; bit 1: request memory info */
     uint32_t checksum = -(magic + flags);
 
     seek_abs(out, 0);
@@ -1603,6 +1610,12 @@ static void fix_cmd(Module *m) {
 
 static void fix_ptr(Module *m) {
     int32_t e = m->sb;
+    if (strcmp(m->name, "AosHeap") == 0) {
+        log_puts("AosHeap ptrTab (before fix, sb="); log_hex(e); log_puts("):\n");
+        for (int32_t i = 0; i < m->nofPtrs; i++) {
+            log_puts("  ptr["); log_int(i); log_puts("] = "); log_int(m->ptrTab[i]); log_ln();
+        }
+    }
     for (int32_t i = 0; i < m->nofPtrs; i++) m->ptrTab[i] += e;
 }
 
@@ -1749,6 +1762,66 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
     }
 
     (void)dataLinks;
+}
+
+/* PROVISORIC: OP2 v2.3.7 generates kernel call 253 (NewRec) for ALL NEW
+ * operations, including protected/active objects.  The AOS runtime expects
+ * NewProtRec for those.  After all fixups are applied, scan the module's
+ * code for the pattern CALL NewRec ... CALL CreateProcess and redirect
+ * the NewRec call to NewProtRec.  (i386 only for now.) */
+static void patch_newrec_for_active_objects(Module *m) {
+    if (arch != &arch_i386) return;
+    if (SysFix[newProtRecSF].adr == 0 || SysFix[StartSF].adr == 0 ||
+        SysFix[newSF].adr == 0)
+        return;
+
+    uint8_t *code = m->code;
+    int32_t codeSize = m->codeSize;
+    int32_t newRecAddr = SysFix[newSF].adr;
+    int32_t createAddr = SysFix[StartSF].adr;
+    int32_t newProtAddr = SysFix[newProtRecSF].adr;
+    int nrCount = 0, cpCount = 0;
+
+    for (int32_t i = 0; i + 5 <= codeSize; i++) {
+        if (code[i] != 0xE8) continue;
+        int32_t rel = get_dword(code, i + 1);
+        int32_t target = m->codeBase + i + 5 + rel;
+        if (target == newRecAddr) nrCount++;
+        if (target == createAddr) cpCount++;
+        if (target != newRecAddr) continue;
+
+        /* Found CALL NewRec at code offset i.  Scan forward up to 100 bytes
+         * for CALL CreateProcess. */
+        for (int32_t j = i + 5; j + 5 <= codeSize && j < i + 100; j++) {
+            if (code[j] != 0xE8) continue;
+            int32_t rel2 = get_dword(code, j + 1);
+            int32_t target2 = m->codeBase + j + 5 + rel2;
+            if (target2 == createAddr) {
+                /* Patch NewRec -> NewProtRec */
+                int32_t newRel = newProtAddr - (m->codeBase + i + 5);
+                put_dword(code, i + 1, newRel);
+                log_puts("  Patched NewRec -> NewProtRec in ");
+                log_puts(m->name);
+                log_puts(" at code offset ");
+                log_int(i);
+                log_ln();
+                break;
+            }
+        }
+    }
+    if (nrCount > 0 || cpCount > 0) {
+        log_puts("  [patch_newrec] ");
+        log_puts(m->name);
+        log_puts(": NewRec calls=");
+        log_int(nrCount);
+        log_puts(", CreateProcess calls=");
+        log_int(cpCount);
+        log_puts(", codeBase=");
+        log_hex(m->codeBase);
+        log_puts(", codeSize=");
+        log_int(codeSize);
+        log_ln();
+    }
 }
 
 /* ------------------------------------------------------------ */
@@ -2176,16 +2249,30 @@ static void read_type(FILE *f, Module *m) {
             for (int32_t j = 0; j < td->nofPtrs; j++) td->ptrOffset[j] = read_i32_le(f);
         }
 
-        /* td size calculations (as in BootLinker.Mod) */
+        /* td size calculations — exact values matching dump_types layout.
+         * Uses the same address-based j-padding and ArrayBit alignment. */
         assert(((uint32_t)(m->typeTableAdr + m->typeTableSize + 4) % Boundary) == 0);
-        td->tdSize = 13 + td->nofMethods + ExtTabWordSize + 1;
-        td->tdSize += (-td->tdSize + 2) % 4;
-        td->tdAdr = td->tdSize * 4 + m->typeTableAdr + m->typeTableSize + 4;
-        assert(((uint32_t)td->tdAdr % 16) == 8);
-        td->tdSize = (td->tdSize + 1 + td->nofPtrs + 1) * 4;
+        { int32_t blockStart = m->typeTableAdr + m->typeTableSize;
+          /* j padding: same formula as dump_types (*next before j = blockStart + 120 + nofMethods*4) */
+          int32_t nextBeforeJ = blockStart + 120 + td->nofMethods * 4;
+          int32_t j = (-nextBeforeJ - 12) % 16;
+          if (j < 0) j += 16;
+          /* Position after j-padding + methods + ext-table + tags (all pre-accounted) */
+          int32_t posAfterTags = nextBeforeJ + j;
+          /* Conditional alignment padding: (tdAdr+4) must have ArrayBit (bit 2) = 0 */
+          int needPad = ((uint32_t)(posAfterTags + 4) & 4) ? 1 : 0;
+          td->tdAdr = posAfterTags + needPad * 4;
+          assert(((uint32_t)(td->tdAdr + 4) & 4) == 0);
+          /* tdSize = block data bytes = from (blockStart+4) to end of sentinel */
+          int32_t dataEnd = td->tdAdr + 4 + 4 + td->nofPtrs * 4 + 4;
+          td->tdSize = dataEnd - (blockStart + 4);
+        }
 
-        /* write td address in constants section */
-        put_dword(m->data + m->dataSize, td->tdEntry, td->tdAdr);
+        /* write td address in constants section.
+         * The type tag must point to the recsize word (tdAdr+4), not the
+         * self-tag word (tdAdr), because NewRec/NewProtRec do
+         * SYSTEM.GET(tag, size) and Mark expects tag = ADR(recsize). */
+        put_dword(m->data + m->dataSize, td->tdEntry, td->tdAdr + 4);
 
         td->padSize = (-td->tdSize - 4) % Boundary;
         if (td->padSize < 0) td->padSize += Boundary;
@@ -2194,6 +2281,17 @@ static void read_type(FILE *f, Module *m) {
         assert((m->typeTableSize % 32) == 0);
 
         m->tdescs[i] = td;
+
+        /* Debug: print type descriptor info */
+        log_puts("  TD["); log_int(i); log_puts("] ");
+        log_puts(m->name); log_puts("."); log_puts(td->name);
+        log_puts(" tdAdr="); log_hex(td->tdAdr);
+        log_puts(" size="); log_int(td->size);
+        log_puts(" nofMethods="); log_int(td->nofMethods);
+        log_puts(" tdEntry="); log_int(td->tdEntry);
+        log_puts(" baseMod="); log_int(td->baseMod);
+        log_puts(" baseEntry="); log_int(td->baseEntry);
+        log_ln();
     }
 }
 
@@ -2392,7 +2490,7 @@ static int32_t find_command_adr(Module *m, const char *cmdName) {
 static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32_t image_base, bool multiboot) {
     log_puts("Init block at "); log_hex(*entry); log_ln();
 
-    /* Compute preamble size */
+    /* Compute preamble size (inside the NewSys block user data) */
     int32_t preamble_size = 0;
 
     if (debugLoop) {
@@ -2412,22 +2510,43 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
         }
     }
 
-    /* +1 call for AosActive.Terminate at the end */
-    int32_t initCodeSize = (nofEntryPoints + 1) * arch->call_instr_size + arch->halt_seq_size + preamble_size;
+    /* Per-module debug markers: 4 bytes each (MOV AL,ch; OUT 0xE9,AL) on i386 */
+    int32_t perModuleMarkerSize = (arch == &arch_i386) ? 4 : 0;
+    /* 'K' marker + one marker before each body call + one before Terminate */
+    int32_t totalMarkerCount = 1 + nofEntryPoints + 1;
+    int32_t debugMarkerSize = (arch == &arch_i386) ? (totalMarkerCount * 4) : 0;
 
-    /* AOS: init code is wrapped in a NewSys block instead of ptr_header */
+    /* +1 call for AosActive.Terminate at the end */
+    int32_t initCodeSize = (nofEntryPoints + 1) * arch->call_instr_size + arch->halt_seq_size + preamble_size + debugMarkerSize;
+
+    /* AOS: init code is wrapped in a NewSys block */
     int32_t blkSize = aos_newsys_block_size(initCodeSize);
     int32_t blkBase = *entry;
     int32_t sysTag = blkBase + 4;
 
-    /* Write NewSys header */
-    write_i32_le(out, sysTag);
+    /* Write NewSys header.
+     * IMPORTANT: MarkBit must NOT be set on these tags!  SysBlk pointers
+     * (base+28) always have bits 3-4 set, so Mark enters the SubObj path.
+     * The SubObj path reads the indirect tag at offset 24 and follows two
+     * levels of indirection to reach the main tag at offset 0.  When MarkBit
+     * is set at offset 24 the indirection computes a misaligned address,
+     * causing the ASSERT at line 250 of AosHeap.Mark to fail.
+     *
+     * Without MarkBit, the SubObj path works correctly:
+     *   1. AosHeap.initBlock (PTR, GC-traced) anchors the init block
+     *   2. FindRoots reads initBlock, calls Mark(initBlock)
+     *   3. Mark follows SubObj path, sets MarkBit at offset 0
+     *   4. Sweep preserves the block
+     *
+     * AosHeap.Init also auto-detects the init block as the last static
+     * block and sets initBlock := p+(4+24) for the SysBlk pointer. */
+    write_i32_le(out, sysTag);      /* tag WITHOUT MarkBit */
     write_i32_le(out, blkSize - 4);
     write_i32_le(out, AosMinPtrOfs - 4);
     write_i32_le(out, 0);
     write_i32_le(out, 0);
     write_i32_le(out, 0);
-    write_i32_le(out, sysTag);
+    write_i32_le(out, sysTag);      /* SysBlk tag WITHOUT MarkBit */
 
     int32_t initCodeStart = blkBase + 28;
     log_puts("Init code at "); log_hex(initCodeStart); log_ln();
@@ -2443,17 +2562,39 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
         pc += emitted;
     }
 
+    /* Early debug marker: emit 'K' to QEMU debug console (port 0xE9) */
+    if (arch == &arch_i386) {
+        write_u8(out, 0xB0); write_u8(out, 'K');  /* MOV AL, 'K' */
+        write_u8(out, 0xE6); write_u8(out, 0xE9); /* OUT 0xE9, AL */
+        pc += 4;
+    }
+
     /* Call module bodies */
     InitPointNode *ip = initPointList;
+    int modIdx = 0;
     while (ip) {
+        /* Per-module debug marker: emit '0'+modIdx to port 0xE9 */
+        if (arch == &arch_i386) {
+            char ch = (modIdx < 10) ? ('0' + modIdx) : ('A' + modIdx - 10);
+            write_u8(out, 0xB0); write_u8(out, (uint8_t)ch);  /* MOV AL, ch */
+            write_u8(out, 0xE6); write_u8(out, 0xE9);         /* OUT 0xE9, AL */
+            pc += perModuleMarkerSize;
+        }
         log_puts("Body at "); log_hex(ip->entryPoint); log_ln();
         arch->WriteCallInstruction(out, ip->entryPoint, pc);
         pc += arch->call_instr_size;
         ip = ip->next;
+        modIdx++;
     }
 
-    /* AOS: Call AosActive.Terminate */
+    /* 6) AOS: Call AosActive.Terminate */
     {
+        /* Marker before Terminate call */
+        if (arch == &arch_i386) {
+            write_u8(out, 0xB0); write_u8(out, 'T');  /* MOV AL, 'T' */
+            write_u8(out, 0xE6); write_u8(out, 0xE9); /* OUT 0xE9, AL */
+            pc += perModuleMarkerSize;
+        }
         Module *activeM = find_module_by_name("AosActive");
         if (activeM) {
             int32_t termAdr = find_command_adr(activeM, "Terminate");
@@ -2463,7 +2604,6 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
                 pc += arch->call_instr_size;
             } else {
                 log_puts("WARNING: AosActive.Terminate command not found\n");
-                /* Still emit a NOP-sized call to keep sizes consistent */
                 arch->WriteCallInstruction(out, pc + arch->call_instr_size, pc);
                 pc += arch->call_instr_size;
             }
@@ -2474,6 +2614,7 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
         }
     }
 
+    /* 7) Halt sequence */
     arch->EmitHaltSequence(out);
 
     /* Pad to block size */
@@ -2481,32 +2622,59 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
     int32_t blkPad = blkSize - 28 - written;
     if (blkPad > 0) write_zeros(out, blkPad);
 
-    /* AOS: Patch root and initBlock pointers using VarByName */
+    /* 8) AOS: Patch initBlock pointers using VarByName.
+     * root was already patched before dump_modules so it's in the image.
+     * initBlock must be patched via seek since module data is already written.
+     *
+     * We patch TWO initBlock variables:
+     *   AosModules.initBlock (SYSTEM.PTR) — used by AosLoader to find init code
+     *   AosHeap.initBlock    (PTR)        — GC-traced anchor that keeps the
+     *                                       init block alive across all GC cycles
+     *
+     * AosModules.initBlock is SYSTEM.PTR (untraced), so the GC never follows it.
+     * AosHeap.initBlock is PTR (traced): the GC's module FindRoots walks the
+     * ptrAdr table and calls Mark(initBlock), which sets MarkBit on the block
+     * tag at offset 0.  Sweep then sees the MarkBit and preserves the block.
+     * Without this, the second GC frees the init block and DebugClear fills
+     * it with 0xDEADDEAD, causing a triple-fault reboot loop. */
     {
+        long savedPos = ftell(out);
+
+        /* Patch AosModules.initBlock */
         Module *modsM = find_module_by_name("AosModules");
         if (modsM && modsM->refs && modsM->refSize > 0) {
-            /* Find 'root' variable offset */
-            int32_t rootOfs = aos_var_by_name(modsM->refs, modsM->refSize, "root");
-            if (rootOfs != 0) {
-                /* Patch root to point to first module's descriptor */
-                put_dword(modsM->data + modsM->dataSize, rootOfs, objectList ? objectList->modDescAdr : 0);
-                log_puts("Patched AosModules.root at sb+"); log_int(rootOfs); log_ln();
-            } else {
-                log_puts("WARNING: AosModules.root not found in refs\n");
-            }
-
-            /* Find 'initBlock' variable offset */
             int32_t initOfs = aos_var_by_name(modsM->refs, modsM->refSize, "initBlock");
             if (initOfs != 0) {
-                /* initBlock points to the init code (after NewSys header) */
-                put_dword(modsM->data + modsM->dataSize, initOfs, initCodeStart);
-                log_puts("Patched AosModules.initBlock at sb+"); log_int(initOfs); log_ln();
+                int32_t fileOfs = modsM->sb + initOfs - imageBase;
+                seek_abs(out, fileOfs);
+                write_i32_le(out, initCodeStart);
+                log_puts("Patched AosModules.initBlock at sb+"); log_int(initOfs);
+                log_puts(" (file offset "); log_hex(fileOfs); log_puts(")\n");
             } else {
                 log_puts("WARNING: AosModules.initBlock not found in refs\n");
             }
         } else {
             log_puts("WARNING: AosModules module not found or has no refs\n");
         }
+
+        /* Patch AosHeap.initBlock — the GC-traced anchor */
+        Module *heapM = find_module_by_name("AosHeap");
+        if (heapM && heapM->refs && heapM->refSize > 0) {
+            int32_t initOfs = aos_var_by_name(heapM->refs, heapM->refSize, "initBlock");
+            if (initOfs != 0) {
+                int32_t fileOfs = heapM->sb + initOfs - imageBase;
+                seek_abs(out, fileOfs);
+                write_i32_le(out, initCodeStart);
+                log_puts("Patched AosHeap.initBlock at sb+"); log_int(initOfs);
+                log_puts(" (file offset "); log_hex(fileOfs); log_puts(")\n");
+            } else {
+                log_puts("WARNING: AosHeap.initBlock not found in refs\n");
+            }
+        } else {
+            log_puts("WARNING: AosHeap module not found or has no refs\n");
+        }
+
+        fseek(out, savedPos, SEEK_SET);
     }
 
     *entry = blkBase + blkSize;
@@ -2537,55 +2705,116 @@ static int32_t get_method_address(int32_t n, TypeDesc *t) {
 
 static void dump_types(FILE *out, Module *m, int32_t *next) {
     for (int32_t i = 0; i < m->nofTds; i++) {
+        /* Align block start to offset 28 mod 32 (Boundary) */
+        { int32_t pad28 = ((28 - ((uint32_t)*next % Boundary)) + Boundary) % Boundary;
+          if (pad28 > 0) { write_bytes(out, padding, (size_t)pad28); *next += pad28; }
+        }
         assert(((uint32_t)*next % Boundary) == 28);
         TypeDesc *t = m->tdescs[i];
+        int32_t blockStart = *next;
         int32_t tag = *next + 4;
+        t->blockAdr = blockStart + 4;  /* RecBlk data start = TypeDesc pointer */
 
+        /* Header: 14 words (56 bytes)
+         * Layout matches AOS NewType (TypeDesc record):
+         *   blockStart+0:  RecBlk tag (= blockStart+4)
+         *   TypeDesc+0  (blockStart+4):  tdSize (patched below)
+         *   TypeDesc+4  (blockStart+8):  sentinel = MinPtrOfs-4
+         *   TypeDesc+8  (blockStart+12): tag (= TypeTag ptr, patched below)
+         *   TypeDesc+12 (blockStart+16): flags (extlev in low bits)
+         *   TypeDesc+16 (blockStart+20): module (= ModOfs)
+         *   TypeDesc+20 (blockStart+24): name[32] (= TypeNameOfs)
+         */
         write_i32_le(out, tag);
-        write_i32_le(out, t->tdSize);
-        write_i32_le(out, -4);
-        write_i32_le(out, t->tdAdr);
-        write_i32_le(out, t->extlev);
-        write_bytes(out, t->name, 32);
-        write_i32_le(out, m->modDescAdr);
+        write_i32_le(out, 0);           /* tdSize placeholder — patched below */
+        write_i32_le(out, 0xBFFFFFFC);  /* sentinel = MinPtrOfs-4 (no traced ptrs in RecBlk) */
+        write_i32_le(out, 0);           /* TypeTag placeholder — patched below */
+        write_i32_le(out, t->extlev);   /* flags (extlev in low bits) */
+        write_i32_le(out, m->modDescAdr); /* module pointer (at ModOfs=16) */
+        write_bytes(out, t->name, 32);  /* name[32] (at TypeNameOfs=20) */
+        *next += 56;
 
-        *next += 13 * 4 + 4;
+        /* Pre-account for methods + extension table */
         *next += t->nofMethods * 4 + 16 * 4;
 
-        /* padding for methods */
+        /* j padding: align *next to 4 mod 16 */
         int32_t j = (-(*next) - 12) % 16;
         if (j < 0) j += 16;
         *next += j;
         assert(((uint32_t)*next % 16) == 4);
         for (int32_t k = 0; k < j / 4; k++) write_i32_le(out, 0);
 
-        /* methods */
-        for (int32_t k = t->nofMethods - 1; k >= 0; k--) {
+        /* methods (reverse order) */
+        for (int32_t k = t->nofMethods - 1; k >= 0; k--)
             write_i32_le(out, get_method_address(k, t));
-        }
 
-        /* padding for tags */
+        /* extension table padding */
         for (int32_t k = t->extlev + 1; k <= 15; k++) write_i32_le(out, 0);
 
-        /* tags (write tdAdr chain) */
+        /* extension table tag entries */
         TypeDesc *cur = t;
         while (cur) {
-            write_i32_le(out, cur->tdAdr);
+            write_i32_le(out, cur->tdAdr + 4);
             if (cur->extlev != 0) cur = cur->baseType;
             else break;
         }
 
-        assert(((uint32_t)*next % 16) == 4);
-        write_i32_le(out, tag);
+        /* Conditional alignment padding: ensures (tdAdr+4) has ArrayBit = 0 */
+        if (((uint32_t)(*next + 4)) & 4) {
+            write_i32_le(out, 0);
+            *next += 4;
+        }
+        assert(((uint32_t)(*next + 4) & 4) == 0);
+
+        /* Compute exact tdAdr and patch constant section if needed */
+        { int32_t expected = t->tdAdr;
+          if (*next != expected) {
+            fprintf(stderr, "WARN: tdAdr mismatch for %s.%s: read_type=0x%08X dump_types=0x%08X diff=%d\n",
+                    m->name, t->name, (unsigned)expected, (unsigned)*next, *next - expected);
+          }
+        }
+        t->tdAdr = *next;
+        { long savedPos = ftell(out);
+          /* Patch constant section type tag */
+          int32_t fileOfs = (m->sb + t->tdEntry) - imageBase;
+          seek_abs(out, fileOfs);
+          write_i32_le(out, t->tdAdr + 4);
+          /* Patch header: tdSize at blockStart+4, tdAdr at blockStart+12 */
+          fseek(out, savedPos, SEEK_SET);
+        }
+
+        /* Self-tag (indirect tag at tdAdr, = ptr+rootOfs-4 in NewType):
+         * Must store blockAdr (= TypeDesc pointer = ptr in NewType).
+         * The SubObj path does: GET(block-4, tag); t = (tag-{ArrayBit})-4;
+         * GET(t, tag); tag = (tag-{MarkBit})-4; ASSERT(t=tag);
+         * With self-tag=blockAdr: t = blockAdr-4 = blockStart;
+         *   RecBlk tag at blockStart = blockAdr; (blockAdr-{MarkBit})-4 = blockStart. ✓
+         * This also prevents HALT(99): the RecBlk tag value has no SubObjBit. */
+        write_i32_le(out, t->blockAdr);
         *next += 4;
 
-        /* record size and ptr offsets */
+        /* Record size + pointer offsets + sentinel */
         write_i32_le(out, t->size);
         for (int32_t k = 0; k < t->nofPtrs; k++) write_i32_le(out, t->ptrOffset[k]);
-        write_i32_le(out, -4 * (t->nofPtrs + 1));
-        write_bytes(out, padding, (size_t)t->padSize);
+        write_i32_le(out, AosMinPtrOfs - 4 * (t->nofPtrs + 1));
+        *next += 4 + t->nofPtrs * 4 + 4;
 
-        *next += 4 + t->nofPtrs * 4 + 4 + t->padSize;
+        /* Compute actual tdSize (block data size) and end-of-block padding */
+        int32_t actualTdSize = *next - (blockStart + 4);
+        int32_t endPad = (-(actualTdSize + 4)) % Boundary;
+        if (endPad < 0) endPad += Boundary;
+        if (endPad > 0) { write_bytes(out, padding, (size_t)endPad); *next += endPad; }
+
+        /* Patch tdSize in the header (blockStart + 4) */
+        { long savedPos = ftell(out);
+          int32_t tdSizeFileOfs = (blockStart + 4) - imageBase;
+          seek_abs(out, tdSizeFileOfs);
+          write_i32_le(out, actualTdSize);
+          /* Also patch TypeDesc.tag in header (blockStart + 12 = TypeDesc+8) */
+          seek_abs(out, tdSizeFileOfs + 8);
+          write_i32_le(out, t->tdAdr + 4);  /* TypeTag = ADR(recSize) */
+          fseek(out, savedPos, SEEK_SET);
+        }
     }
 }
 
@@ -2654,6 +2883,27 @@ static void dump_modules(FILE *out) {
     Module *m = objectList;
     int32_t prevmod = 0;
 
+    /* Find the AosModules.Module type descriptor so we can write the correct
+     * type tag at offset ProtOfs (48) of each module descriptor PROT block.
+     * NewProtRec stores: SYSTEM.PUT(ptr+(ProtOfs-4), tag) where tag = tdAdr+4.
+     * Mark reads: SYSTEM.GET(block-4, tag) to get the type tag for traversal. */
+    int32_t moduleTypeTag = 0;
+    {
+        Module *modsM = find_module_by_name("AosModules");
+        if (modsM) {
+            for (int32_t i = 0; i < modsM->nofTds; i++) {
+                if (modsM->tdescs[i]->size == AosModuleDescSize) {
+                    moduleTypeTag = modsM->tdescs[i]->tdAdr + 4;
+                    log_puts("Module type tag (ADR(recsize)) = ");
+                    log_hex(moduleTypeTag); log_ln();
+                    break;
+                }
+            }
+        }
+        if (moduleTypeTag == 0)
+            log_puts("WARNING: AosModules.Module type descriptor not found\n");
+    }
+
     while (m) {
         log_ln();
         log_puts("--------- MODULE "); log_puts(m->name); log_ln();
@@ -2669,23 +2919,66 @@ static void dump_modules(FILE *out) {
             assert(modBlkSize <= (int32_t)sizeof(modBlk));
             memset(modBlk, 0, (size_t)modBlkSize);
 
-            /* tag at offset 0: will point to the Module type descriptor.
-             * For boot image we leave it 0 (patched by kernel at load time). */
+            /* NewProtRec-style block header (same layout as AosHeap.NewProtRec):
+             *   base+0:  tag = base+4 (self-referencing)
+             *   base+4:  size-4
+             *   base+8:  MinPtrOfs-4 (sentinel)
+             *   base+14: flag = -1 (16-bit, marks protected object)
+             *   base+4+ProtOfs-4 = base+AosProtOfs: type tag -> Module TD recsize
+             */
+            {
+                uint32_t selfTag = (uint32_t)(m->base + 4);
+                modBlk[0] = (uint8_t)selfTag;
+                modBlk[1] = (uint8_t)(selfTag >> 8);
+                modBlk[2] = (uint8_t)(selfTag >> 16);
+                modBlk[3] = (uint8_t)(selfTag >> 24);
+                uint32_t sz = (uint32_t)(modBlkSize - 4);
+                modBlk[4] = (uint8_t)sz;
+                modBlk[5] = (uint8_t)(sz >> 8);
+                modBlk[6] = (uint8_t)(sz >> 16);
+                modBlk[7] = (uint8_t)(sz >> 24);
+                uint32_t sentinel = (uint32_t)(AosMinPtrOfs - 4);
+                modBlk[8] = (uint8_t)sentinel;
+                modBlk[9] = (uint8_t)(sentinel >> 8);
+                modBlk[10] = (uint8_t)(sentinel >> 16);
+                modBlk[11] = (uint8_t)(sentinel >> 24);
+                /* flag = -1 at offset 14 (16-bit) */
+                modBlk[14] = 0xFF;
+                modBlk[15] = 0xFF;
+                /* Write Module type tag at offset 4+ProtOfs-4 = AosProtOfs
+                 * (NewProtRec line 869: SYSTEM.PUT(ptr+(ProtOfs-4), tag)) */
+                if (moduleTypeTag != 0) {
+                    uint32_t tt = (uint32_t)moduleTypeTag;
+                    modBlk[AosProtOfs]   = (uint8_t)(tt);
+                    modBlk[AosProtOfs+1] = (uint8_t)(tt >> 8);
+                    modBlk[AosProtOfs+2] = (uint8_t)(tt >> 16);
+                    modBlk[AosProtOfs+3] = (uint8_t)(tt >> 24);
+                }
+            }
 
             /* The 172-byte module descriptor starts at offset 4 + AosProtOfs */
             int32_t dOfs = 4 + AosProtOfs; /* = 52 */
 
-            /* AOS Module descriptor fields (172 bytes):
-             *   0: next(4) 4: name(32) 36: init(4) 40: published(4)
+            /* AOS Module descriptor fields (172 bytes).
+             * Module = OBJECT (RootObject) — RootObject adds 4-byte placeholder
+             * at offset 0, shifting all declared fields by 4.
+             * Field order follows AosModules.Mod declaration order.
+             * BOOLEAN fields (init, published) are 1 byte each.
+             *
+             *   0: placeholder(4)  4: next(4)  8: name(32)
+             *  40: init(1) 41: published(1) [42-43: pad]
              *  44: refcnt(4) 48: sb(4)
-             *  52: entry(4) 56: command(4) 60: ptrAdr(4) 64: type(4)
-             *  68: module(4) 72: data(4) 76: code(4) 80: refs(4)
-             *  84: entries(4) 88: commands(4) 92: pointers(4) 96: types(4)
-             * 100: modules(4) 104: dataSize(4) 108: constSize(4) 112: codeSize(4)
-             * 116: refSize(4) 120: CRC(4)
-             * 124: export.fp(4) 128: export.adr(4) 132: export.nofExp(4) 136: export.dsc(4)
-             * 140: import(4) 144: struct(4) 148: reimp(4) 152: term(4)
-             * 156: publics(4) 160: privates(4) 164: nofimp(4) 168: nofstrc(4)
+             *  52: dataSize(4) 56: constSize(4) 60: codeSize(4) 64: refSize(4)
+             *  68: entries(4) 72: commands(4) 76: modules(4) 80: types(4)
+             *  84: pointers(4)
+             *  88: entry(4) 92: command(4) 96: ptrAdr(4) 100: type(4)
+             * 104: module(4) 108: data(4) 112: code(4) 116: refs(4)
+             * 120: publics(4) 124: privates(4)
+             * 128: imports(4) 132: import(4)
+             * 136: nofstrc(4) 140: struct(4)
+             * 144: nofreimp(4) 148: reimp(4)
+             * 152: export.fp(4) 156: export.adr(4) 160: export.nofExp(4) 164: export.dsc(4)
+             * 168: term(4)
              */
 
             /* Compute sub-array addresses (same logic as load_module_body) */
@@ -2717,50 +3010,63 @@ static void dump_modules(FILE *out) {
     (buf)[(off)+3] = (uint8_t)(v_ >> 24); \
 } while(0)
 
+            /* placeholder (RootObject base, offset 0) — already 0 from memset */
             /* next (link) */
-            PUT32(modBlk, dOfs + 0, prevmod);
+            PUT32(modBlk, dOfs + 4, prevmod);
             /* name */
-            memcpy(modBlk + dOfs + 4, m->name, 32);
-            /* init */
-            PUT32(modBlk, dOfs + 36, m->init ? 1 : 0);
-            /* published */
-            PUT32(modBlk, dOfs + 40, 1);
+            memcpy(modBlk + dOfs + 8, m->name, 32);
+            /* init (BOOLEAN, 1 byte) */
+            modBlk[dOfs + 40] = m->init ? 1 : 0;
+            /* published (BOOLEAN, 1 byte) */
+            modBlk[dOfs + 41] = 1;
             /* refcnt */
             PUT32(modBlk, dOfs + 44, m->refcnt > 0 ? (uint32_t)m->refcnt : 1);
             /* sb */
             PUT32(modBlk, dOfs + 48, (uint32_t)m->sb);
-            /* array pointers (point to array header, i.e. first byte after indirect tag) */
-            PUT32(modBlk, dOfs + 52, (uint32_t)entryAdr);
-            PUT32(modBlk, dOfs + 56, (uint32_t)cmdAdr);
-            PUT32(modBlk, dOfs + 60, (uint32_t)ptrAdr);
-            PUT32(modBlk, dOfs + 64, (uint32_t)typeAdr);
-            PUT32(modBlk, dOfs + 68, (uint32_t)modAdr);
-            PUT32(modBlk, dOfs + 72, (uint32_t)dataAdr);
-            PUT32(modBlk, dOfs + 76, (uint32_t)codeAdr);
-            PUT32(modBlk, dOfs + 80, (uint32_t)refsAdr);
-            /* counts */
-            PUT32(modBlk, dOfs + 84, (uint32_t)m->nofEntries);
-            PUT32(modBlk, dOfs + 88, (uint32_t)m->nofCmds);
-            PUT32(modBlk, dOfs + 92, (uint32_t)m->nofPtrs);
-            PUT32(modBlk, dOfs + 96, (uint32_t)m->nofTds);
-            PUT32(modBlk, dOfs + 100, (uint32_t)m->nofImps);
             /* sizes */
-            PUT32(modBlk, dOfs + 104, (uint32_t)m->dataSize);
-            PUT32(modBlk, dOfs + 108, (uint32_t)m->conSize);
-            PUT32(modBlk, dOfs + 112, (uint32_t)m->codeSize);
-            PUT32(modBlk, dOfs + 116, (uint32_t)m->refSize);
-            /* CRC = 0 */
-            /* export desc */
-            PUT32(modBlk, dOfs + 124, (uint32_t)m->exportTree.fp);
-            PUT32(modBlk, dOfs + 128, (uint32_t)m->exportTree.adr);
-            PUT32(modBlk, dOfs + 132, (uint32_t)m->exportTree.nofExp);
-            PUT32(modBlk, dOfs + 136, (m->exportTree.nofExp == 0) ? 0
-                  : (uint32_t)m->exportTree.dsc[0].Adr);
+            PUT32(modBlk, dOfs + 52, (uint32_t)m->dataSize);
+            PUT32(modBlk, dOfs + 56, (uint32_t)m->conSize);
+            PUT32(modBlk, dOfs + 60, (uint32_t)m->codeSize);
+            PUT32(modBlk, dOfs + 64, (uint32_t)m->refSize);
+            /* counts (declaration order: entries, commands, modules, types, pointers) */
+            PUT32(modBlk, dOfs + 68, (uint32_t)m->nofEntries);
+            PUT32(modBlk, dOfs + 72, (uint32_t)m->nofCmds);
+            PUT32(modBlk, dOfs + 76, (uint32_t)m->nofImps);
+            PUT32(modBlk, dOfs + 80, (uint32_t)m->nofTds);
+            PUT32(modBlk, dOfs + 84, (uint32_t)m->nofPtrs);
+            /* array pointers (declaration order: entry, command, ptrAdr, type, module, data, code, refs)
+             * +4 skips the tag word so pointer points to array header (AOS convention:
+             * tag is at ptr-4, header at ptr, elements at ptr+AosArrHdrSize).
+             * This also ensures the GC can read the sub-array's own tag at ptr-4
+             * (= sysTag) and handle each sub-array as a SysBlk. */
+            PUT32(modBlk, dOfs + 88, (uint32_t)(entryAdr + 4));
+            PUT32(modBlk, dOfs + 92, (uint32_t)(cmdAdr + 4));
+            PUT32(modBlk, dOfs + 96, (uint32_t)(ptrAdr + 4));
+            PUT32(modBlk, dOfs + 100, (uint32_t)(typeAdr + 4));
+            PUT32(modBlk, dOfs + 104, (uint32_t)(modAdr + 4));
+            PUT32(modBlk, dOfs + 108, (uint32_t)(dataAdr + 4));
+            PUT32(modBlk, dOfs + 112, (uint32_t)(codeAdr + 4));
+            PUT32(modBlk, dOfs + 116, (uint32_t)(refsAdr + 4));
             /* publics / privates */
-            PUT32(modBlk, dOfs + 156, (uint32_t)m->publics);
-            PUT32(modBlk, dOfs + 160, (uint32_t)m->privates);
-            PUT32(modBlk, dOfs + 164, (uint32_t)m->nofimp);
-            PUT32(modBlk, dOfs + 168, (uint32_t)m->nofstrc);
+            PUT32(modBlk, dOfs + 120, (uint32_t)m->publics);
+            PUT32(modBlk, dOfs + 124, (uint32_t)m->privates);
+            /* imports (count), import (ptr — NIL for boot modules) */
+            PUT32(modBlk, dOfs + 128, (uint32_t)m->nofimp);
+            /* import ptr at 132 = 0 (already zeroed) */
+            /* nofstrc, struct (ptr — NIL) */
+            PUT32(modBlk, dOfs + 136, (uint32_t)m->nofstrc);
+            /* struct ptr at 140 = 0 (already zeroed) */
+            /* nofreimp at 144 = 0, reimp ptr at 148 = 0 (already zeroed) */
+            /* export desc */
+            PUT32(modBlk, dOfs + 152, (uint32_t)m->exportTree.fp);
+            PUT32(modBlk, dOfs + 156, (uint32_t)m->exportTree.adr);
+            PUT32(modBlk, dOfs + 160, (uint32_t)m->exportTree.nofExp);
+            /* export.dsc = NIL: the export section is inside the SysBlk (not a
+             * standalone heap block), so Mark cannot follow it safely.  The
+             * export descriptor is only needed by the dynamic module loader,
+             * which is not used for boot-linked modules. */
+            PUT32(modBlk, dOfs + 164, 0);
+            /* term at 168 = 0 (already zeroed) */
 #undef PUT32
 
             write_bytes(out, modBlk, (size_t)modBlkSize);
@@ -2780,12 +3086,16 @@ static void dump_modules(FILE *out) {
                 aos_arr_size(m->codeSize, 1) +
                 aos_arr_size(m->refSize, 1);
             int32_t blkSize = aos_newsys_block_size(subTotal);
-            int32_t blkBase = m->base + aos_newmodule_block_size();
+            int32_t modBlkSize2 = aos_newmodule_block_size();
+            int32_t blkBase = m->base + modBlkSize2;
             int32_t sysTag = blkBase + 4; /* NewSys tag points to blkBase+4 */
+            /* The reported size covers the full span from data block to next module,
+             * including exports and type descriptors, so the heap walk can traverse. */
+            int32_t fullDataSpan = m->imageSize - modBlkSize2;
 
             /* NewSys header (28 bytes) */
             write_i32_le(out, sysTag);                  /* tag -> self+4 */
-            write_i32_le(out, blkSize - 4);             /* size - 4 */
+            write_i32_le(out, fullDataSpan - 4);        /* size - 4 */
             write_i32_le(out, AosMinPtrOfs - 4);        /* sentinel */
             write_i32_le(out, 0);                       /* nil */
             write_i32_le(out, 0);                       /* nil */
@@ -2835,7 +3145,7 @@ static void dump_modules(FILE *out) {
             /* Type descriptor pointers array */
             EMIT_ARR_HDR(m->nofTds, 4);
             for (int32_t i = 0; i < m->nofTds; i++)
-                write_i32_le(out, m->tdescs[i]->tdAdr);
+                write_i32_le(out, m->tdescs[i]->blockAdr);  /* TypeDesc ptr (= ptr from NewType) */
             { int32_t dataN = m->nofTds * 4;
               int32_t arrSz = aos_arr_size(m->nofTds, 4);
               int32_t pad = arrSz - AosArrHdrSize - 4 - dataN;
@@ -2852,14 +3162,14 @@ static void dump_modules(FILE *out) {
               if (pad > 0) write_zeros(out, pad);
               written += arrSz; }
 
-            /* Data + Const array */
+            /* Data + Const array.
+             * Layout: [data(dataSize)] [const(conSize)] [padding]
+             * sb = dataArrAdr + AosArrHdrSize + 4 + dataSize (boundary between data and const).
+             * Data uses negative offsets from sb, const uses non-negative offsets. */
             EMIT_ARR_HDR(dataSizePad + m->conSize, 1);
             write_bytes(out, m->data, (size_t)(m->dataSize + m->conSize));
             { int32_t dataN = dataSizePad + m->conSize;
-              int32_t gap = dataSizePad - m->dataSize; /* padding between data and const */
-              /* data section is dataSize bytes, but we need dataSizePad for alignment */
-              /* However, m->data already contains dataSize + conSize bytes contiguously.
-               * We wrote dataSize+conSize, need dataSizePad+conSize total. */
+              int32_t gap = dataSizePad - m->dataSize;
               if (gap > 0) write_zeros(out, gap);
               int32_t arrSz = aos_arr_size(dataN, 1);
               int32_t pad = arrSz - AosArrHdrSize - 4 - dataN;
@@ -2893,27 +3203,31 @@ static void dump_modules(FILE *out) {
 
         /* ---- 3) Export padding + export dump ---- */
         {
-            int32_t next = m->base + aos_newmodule_block_size() +
-                           aos_newsys_block_size(
-                               aos_arr_size(m->nofEntries, 4) +
-                               aos_arr_size(m->nofCmds, AosCommandRecSize) +
-                               aos_arr_size(m->nofPtrs, 4) +
-                               aos_arr_size(m->nofTds, 4) +
-                               aos_arr_size(m->nofImps, 4) +
-                               aos_arr_size(m->dataSize + ((-m->dataSize) & 7) + m->conSize, 1) +
-                               aos_arr_size(m->codeSize, 1) +
-                               aos_arr_size(m->refSize, 1));
+            /* Use expAdr from load_module_body to stay consistent */
+            int32_t next = m->expAdr;
 
             /* export padding + sentinel tag slot */
             write_bytes(out, padding, (size_t)(m->expPadding + 4));
-            next += m->expPadding + 4;
+            next += 4; /* advance past sentinel to expAdr+4 (32-aligned) */
             assert(((uint32_t)next % 32) == 0);
             /* AOS: export tag = 0 (no expDescSF) */
             dump_export(out, &m->exportTree, &next, 0 | 2);
 
-            /* types */
+            /* types — next points 4 bytes into the tag-slot reserved by
+             * expPadding+4; back up both the address tracker AND the file
+             * position so that dump_types writes the type-block tag into
+             * the pre-allocated sentinel slot. */
             next -= 4;
+            fseek(out, -4, SEEK_CUR);
             dump_types(out, m, &next);
+        }
+
+        /* ---- 4) Pad to block-aligned imageSize ---- */
+        {
+            int32_t curFilePos = (int32_t)tell_abs(out);
+            int32_t expectedEnd = m->base + m->imageSize - imageBase;
+            if (expectedEnd > curFilePos)
+                write_zeros(out, expectedEnd - curFilePos);
         }
 
         m = m->link;
@@ -2938,13 +3252,63 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
 
     dump_modules(out);
 
+    /* AOS: Patch root in the image file via seek (after dump_modules wrote the data).
+     * root must point to the LAST module (Publish prepends, so root = tail of chain). */
+    {
+        Module *modsM = find_module_by_name("AosModules");
+        if (modsM && modsM->refs && modsM->refSize > 0) {
+            int32_t rootOfs = aos_var_by_name(modsM->refs, modsM->refSize, "root");
+            if (rootOfs != 0) {
+                Module *last = objectList;
+                while (last && last->link) last = last->link;
+                int32_t rootVal = last ? last->modDescAdr : 0;
+                int32_t fileOfs = modsM->sb + rootOfs - base;
+                long savedPos = ftell(out);
+                seek_abs(out, fileOfs);
+                write_i32_le(out, rootVal);
+                fseek(out, savedPos, SEEK_SET);
+                log_puts("Patched AosModules.root at sb+"); log_int(rootOfs);
+                log_puts(" -> "); log_hex(rootVal);
+                log_puts(" (file offset "); log_hex(fileOfs); log_puts(")\n");
+            } else {
+                log_puts("WARNING: AosModules.root not found in refs\n");
+            }
+        }
+    }
+
     int32_t ep = entryPoint;
+    int32_t initCodeEntry = ep + 28; /* init code starts after NewSys header (7 * 4 = 28 bytes) */
     int32_t stack_size = enable_stack ? stackSize : 0;
     dump_init_calls(out, &ep, stack_size, base, multiboot);
 
+    /* AOS: write heap end address at EndBlockOfs (0x38) from image base.
+     * The kernel reads this in AosMemory.InitPages and GetStaticHeap.
+     * freeAdr must satisfy: freeAdr MOD StaticBlockSize = StaticBlockSize-4 (i.e. MOD 32 = 28). */
+    {
+        int32_t freeAdr = ep; /* ep is address past init code block */
+        int32_t r = freeAdr % 32;
+        if (r < 0) r += 32;
+        if (r <= 28)
+            freeAdr += (28 - r);
+        else
+            freeAdr += (32 - r + 28);
+        /* Pad the image file to cover up to freeAdr */
+        int32_t curFileEnd = (int32_t)tell_abs(out);
+        int32_t neededFileEnd = freeAdr - base;
+        if (neededFileEnd > curFileEnd) {
+            write_zeros(out, neededFileEnd - curFileEnd);
+        }
+        /* Write freeAdr at file offset EndBlockOfs (0x38) */
+        seek_abs(out, 0x38);
+        write_i32_le(out, freeAdr);
+        fseek(out, 0, SEEK_END); /* back to end */
+        log_puts("EndBlockOfs (0x38): freeAdr = "); log_hex(freeAdr);
+        log_puts(" (MOD 32 = "); log_int(freeAdr % 32); log_puts(")"); log_ln();
+    }
+
     int32_t size = (int32_t)tell_abs(out);
 
-    if (multiboot && arch->PatchMultibootHeader(out, base, ep, size)) {
+    if (multiboot && arch->PatchMultibootHeader(out, base, initCodeEntry, size)) {
         /* Multiboot header written (i386) */
     } else {
         /* Standard Native Oberon header (always for non-i386, or when --multiboot not set) */
@@ -2954,9 +3318,11 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
     fclose(out);
 
     /* Log sysfix summary */
-    log_puts("new is "); log_puts(SysFix[newSF].module); log_puts("."); log_puts(SysFix[newSF].command); log_puts(" "); log_hex(SysFix[newSF].adr); log_ln();
-    log_puts("sysnew is "); log_puts(SysFix[sysnewSF].module); log_puts("."); log_puts(SysFix[sysnewSF].command); log_puts(" "); log_hex(SysFix[sysnewSF].adr); log_ln();
-    log_puts("newarr is "); log_puts(SysFix[newarrSF].module); log_puts("."); log_puts(SysFix[newarrSF].command); log_puts(" "); log_hex(SysFix[newarrSF].adr); log_ln();
+    for (int i = 0; i <= copyarraySF; i++) {
+        if (SysFix[i].command[0]) {
+            log_puts(SysFix[i].name); log_puts(" is "); log_puts(SysFix[i].module); log_puts("."); log_puts(SysFix[i].command); log_puts(" "); log_hex(SysFix[i].adr); log_ln();
+        }
+    }
 }
 
 /* ------------------------------------------------------------ */
@@ -3096,9 +3462,15 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     int32_t refsArrAdr = arrOfs;
     (void)refsArrAdr; /* used in dump_modules */
 
-    m->sb = dataArrAdr + AosArrHdrSize + dataSizePad;
-    m->codeBase = codeArrAdr + AosArrHdrSize;
-    m->refBase = refsArrAdr + AosArrHdrSize;
+    /* OP2 convention: sb = boundary between data and const sections.
+     * Data variables use negative offsets (sb-dataSize..sb-1),
+     * const variables use non-negative offsets (sb..sb+conSize-1).
+     *
+     * NOTE: write_aos_arr writes 20 bytes = tag(4) + header(AosArrHdrSize=16).
+     * xxxArrAdr points to the tag position, so data starts at xxxArrAdr + AosArrHdrSize + 4. */
+    m->sb = dataArrAdr + AosArrHdrSize + 4 + m->dataSize;
+    m->codeBase = codeArrAdr + AosArrHdrSize + 4;
+    m->refBase = refsArrAdr + AosArrHdrSize + 4;
 
     m->imageSize += dataBlkSize;
 
@@ -3106,15 +3478,16 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     m->expAdr = align_up(m->base + m->imageSize + 4, Boundary) - 4;
     m->expPadding = m->expAdr - m->base - m->imageSize;
     m->expSize = 0;
-    m->imageSize += m->expPadding;
+    m->imageSize += m->expPadding + 4; /* +4 for sentinel tag slot written before exports */
     assign_export_sizes(&m->exportTree, m);
     m->imageSize += m->expSize;
 
     /* ReadUse uses size info */
     read_use(f, m, dataLinks);
 
-    /* 4) Type descriptors */
-    m->typeTableAdr = m->base + m->imageSize;
+    /* 4) Type descriptors – typeTableAdr is 4 less than imageSize because
+       dump_modules applies next -= 4 after exports (the sentinel tag gap) */
+    m->typeTableAdr = m->base + m->imageSize - 4;
     m->typeTableSize = 0;
     read_type(f, m);
     m->imageSize += m->typeTableSize;
@@ -3141,14 +3514,20 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
         fix_ptr(m);
         fix_data_links(m, dataLinks);
         fixup_links(m, links, nofLinks, dataLinks);
+        patch_newrec_for_active_objects(m);
 
-        /* SELF pointer at beginning of constants */
-        put_dword(m->data + m->dataSize, 0, m->modDescAdr);
+        /* SELF pointer at beginning of constants — only for old OP2 (csize=4).
+         * With --aos compiler (csize=0), const[0] holds real data; skip SELF. */
+        /* put_dword(m->data + m->dataSize, 0, m->modDescAdr); */
 
         init_types(m);
         m->init = true;
         add_init_point(m->codeBase, m);
 
+        /* Round up imageSize to AosBlockSize so the heap walk can traverse
+         * from this module's data block to the next module's descriptor block.
+         * The data block's reported size will cover exports and type descriptors. */
+        m->imageSize = (m->imageSize + AosBlockSize - 1) & ~(AosBlockSize - 1);
         *base = *base + m->imageSize;
     } else {
         halt_msg("LoadModule failed");
