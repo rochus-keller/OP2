@@ -42,7 +42,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------ */
 /* Constants (from BootLinker.Mod) */
 
 enum {
@@ -123,7 +122,6 @@ static bool hypToSvc = false;     /* --hyp-to-svc: emit HYP->SVC mode switch (RP
 static bool coreParking = false;  /* --core-parking: park secondary cores in WFE loop (RPi) */
 static bool debugLoop = false;    /* --debug-loop: emit register-based infinite loop at start */
 
-/* ------------------------------------------------------------ */
 /* Basic types */
 
 typedef char Name[32];
@@ -187,6 +185,7 @@ struct TypeDesc {
     TypeDesc *baseType;
     int32_t extlev;
     bool initialized;
+    bool isProtected;  /* true if type has EXCLUSIVE methods (needs NewProtRec) */
     Module *module;
 };
 
@@ -308,7 +307,6 @@ typedef struct {
     int32_t term;
 } DumpModuleDesc;
 
-/* ------------------------------------------------------------ */
 /* Architecture abstraction */
 
 typedef struct ArchOps ArchOps;
@@ -359,7 +357,6 @@ struct ArchOps {
 static const ArchOps arch_i386, arch_arm32, arch_rv32;
 static const ArchOps *arch = &arch_i386; /* default */
 
-/* ------------------------------------------------------------ */
 /* Globals */
 
 static SysFixEntry SysFix[MaxSF];
@@ -398,7 +395,6 @@ enum {
     incompImport = 16,
 };
 
-/* ------------------------------------------------------------ */
 /* Utility: logging */
 
 static void log_close(void);
@@ -511,7 +507,6 @@ static void sysfix_warning(int i) {
 }
 
 
-/* ------------------------------------------------------------ */
 /* Utility: string handling */
 
 static void str_concat(const char *s1, const char *s2, char *out, size_t out_sz) {
@@ -536,7 +531,6 @@ static void extract_names(const char *in, char *module, size_t module_sz, char *
     snprintf(proc, proc_sz, "%s", dot + 1);
 }
 
-/* ------------------------------------------------------------ */
 /* Utility: endian read/write */
 
 static uint8_t read_u8(FILE *f) {
@@ -650,7 +644,6 @@ static long tell_abs(FILE *f) {
     return p;
 }
 
-/* ------------------------------------------------------------ */
 /* Utility: arithmetic */
 
 static int32_t align_up(int32_t num, int32_t boundary) {
@@ -673,7 +666,6 @@ static int32_t and32(int32_t x, int32_t y) {
     return (int32_t)((uint32_t)x & (uint32_t)y);
 }
 
-/* ------------------------------------------------------------ */
 /* Module list handling */
 
 static Module *find_module(const char *name) {
@@ -725,7 +717,6 @@ static void add_init_point(int32_t entryPoint, Module *object) {
     nofEntryPoints++;
 }
 
-/* ------------------------------------------------------------ */
 /* SysFix initialization */
 
 static void init_sysfix(int idx, const char *name, const char *module, const char *command, bool autofix) {
@@ -787,7 +778,6 @@ static void initialise(void) {
 
 }
 
-/* ------------------------------------------------------------ */
 /* Fixup helpers (operate on in-memory code/data arrays) */
 
 static void put_dword(uint8_t *code, int32_t idx, int32_t value) {
@@ -803,10 +793,8 @@ static int32_t get_dword(const uint8_t *code, int32_t idx) {
             ((uint32_t)code[idx + 2] << 16) | ((uint32_t)code[idx + 3] << 24));
 }
 
-/* ------------------------------------------------------------ */
 /* Architecture-specific implementations */
 
-/* ---- i386 ---- */
 
 static void i386_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     int32_t instr, nextlink, jmp;
@@ -856,7 +844,7 @@ static int32_t i386_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multib
     emitted += 5;
 
     if (multiboot) {
-        /* PUSH EBX — Multiboot info pointer */
+        /* PUSH EBX, Multiboot info pointer */
         write_u8(out, 0x53);
         emitted += 1;
      }
@@ -931,7 +919,6 @@ static int32_t i386_EmitDebugLoop(FILE *out) {
     return 9;
 }
 
-/* ---- ARMv6/v7 ---- */
 
 static void arm_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
     /* ARM compiler stores the fixup chain in the low 24 bits of BL instructions
@@ -1001,8 +988,8 @@ static void arm_EmitHaltSequence(FILE *out) {
 }
 
 static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multiboot) {
-    /* MOV SP, #(initial_sp & 0xFFFF)  — lower 16 bits via MOVW
-     * MOVT SP, #(initial_sp >> 16)    — upper 16 bits
+    /* MOV SP, #(initial_sp & 0xFFFF) , lower 16 bits via MOVW
+     * MOVT SP, #(initial_sp >> 16)   , upper 16 bits
      * ARM encoding for MOVW Rd, #imm16: 0xE30D0000 | (imm4 << 16) | (Rd << 12) | imm12
      *   where imm16 = (imm4 << 12) | imm12, Rd = 13 (SP)
      * ARM encoding for MOVT Rd, #imm16: 0xE34D0000 | (imm4 << 16) | (Rd << 12) | imm12 */
@@ -1032,14 +1019,6 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
     /* Optional core parking (--core-parking).
      * On raspi2b/raspi3b, all 4 cores start executing.  Only core 0
      * should run the init code; the others must spin.
-     *
-     * MRC p15, 0, r0, c0, c0, 5  @ Read MPIDR          = 0xEE100FB0
-     * ANDS r0, r0, #3            @ Extract core ID      = 0xE2100003
-     * BEQ skip                   @ Core 0 -> continue   = 0x0A000001
-     * wfe_loop:
-     * WFE                        @ Wait for event       = 0xE320F002
-     * B wfe_loop                 @ Loop forever          = 0xEAFFFFFE
-     * skip:
      */
     if (coreParking) {
         write_i32_le(out, (int32_t)0xEE100FB0u);  /* MRC p15, 0, r0, c0, c0, 5 */
@@ -1051,14 +1030,7 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
     }
 
     /* Enable VFP/NEON coprocessor (CP10 + CP11) before any VFP instructions.
-     * Required on ARMv7 — without this, VFP instructions cause undefined instruction exceptions.
-     *
-     * MRC p15, 0, r0, c1, c0, 2    @ Read CPACR           = 0xEE100F50 (actually EE110F50)
-     * ORR r0, r0, #0x00F00000      @ Enable CP10+CP11     = 0xE380060F
-     * MCR p15, 0, r0, c1, c0, 2    @ Write CPACR          = 0xEE010F50
-     * ISB                           @ Instruction barrier   = 0xF57FF06F
-     * MOV r0, #0x40000000           @ FPEXC.EN bit         = 0xE3A00101 (via rotate)
-     * VMSR FPEXC, r0               @ Enable VFP           = 0xEEE80A10
+     * Required on ARMv7, without this, VFP instructions cause undefined instruction exceptions.
      */
     write_i32_le(out, (int32_t)0xEE110F50u);  /* MRC p15, 0, r0, c1, c0, 2 */
     write_i32_le(out, (int32_t)0xE380060Fu);  /* ORR r0, r0, #0x00F00000 */
@@ -1081,7 +1053,7 @@ static int32_t arm_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multibo
     emitted += 8;
 
     if (multiboot) {
-        /* PUSH {R2} — boot info / device tree pointer
+        /* PUSH {R2}, boot info / device tree pointer
          * STMDB SP!, {R2} = 0xE92D0004 */
         write_i32_le(out, (int32_t)0xE92D0004u);
         emitted += 4;
@@ -1186,7 +1158,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
     uint32_t bits27_20 = (instr >> 20) & 0xFF;
 
     if (bits27_20 == 0x30) {
-        /* ---- MOVW (move wide, 16-bit immediate) ----
+        /* MOVW (move wide, 16-bit immediate)
          * Encoding: cond[31:28] 0011_0000 imm4[19:16] Rd[15:12] imm12[11:0]
          * The compiler emits MOVW+MOVT pairs for absolute data references.
          * MOVW is at 'off', MOVT is at 'off+4'.
@@ -1217,7 +1189,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
         put_dword(code, off + 4, (int32_t)new_movt);
 
     } else if (((instr >> 25) & 0x7) == 1) {
-        /* ---- Data-processing immediate (I=1) ----
+        /* Data-processing immediate (I=1)
          * cond[31:28] 00 1 opcode[24:21] S[20] Rn[19:16] Rd[15:12] imm12[11:0]
          * Legacy path for old-style ADD/SUB Rd, PC, #imm data refs */
         uint32_t Rd   = (instr >> 12) & 0xF;
@@ -1256,7 +1228,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
         put_dword(code, off, (int32_t)new_instr);
 
     } else if (((instr >> 26) & 0x3) == 1 && ((instr >> 25) & 1) == 0) {
-        /* ---- LDR/STR immediate offset (I=0) ----
+        /* LDR/STR immediate offset (I=0)
          * cond[31:28] 01 0 P[24] U[23] B[22] W[21] L[20]
          * Rn[19:16] Rd[15:12] offset12[11:0] */
         uint32_t offset12 = instr & 0xFFF;
@@ -1296,7 +1268,7 @@ static void arm_fixup_data_at(uint8_t *code, int32_t off,
         put_dword(code, off, (int32_t)new_instr);
 
     } else {
-        /* Raw 32-bit literal (e.g. from inline-assembly PutWordAt) —
+        /* Raw 32-bit literal (e.g. from inline-assembly PutWordAt),
          * treat like i386: add fixval directly. */
         put_dword(code, off, (int32_t)(instr + (uint32_t)fixval));
     }
@@ -1314,7 +1286,6 @@ static int32_t arm_EmitDebugLoop(FILE *out) {
     return 12;
 }
 
-/* ---- RV32 (RISC-V 32-bit) ---- */
 
 /* RV32-specific VarConsLink data fixup.
  *
@@ -1418,7 +1389,7 @@ static void rv32_WriteCallInstruction(FILE *out, int32_t target, int32_t pc) {
 static void rv32_EmitHaltSequence(FILE *out) {
     /* WFI: 0x10500073 */
     write_i32_le(out, (int32_t)0x10500073u);
-    /* J . (JAL x0, 0 — jump to self): offset=0, rd=0 -> opcode 0x6F */
+    /* J . (JAL x0, 0, jump to self): offset=0, rd=0 -> opcode 0x6F */
     write_i32_le(out, (int32_t)0x0000006Fu);
 }
 
@@ -1446,7 +1417,7 @@ static int32_t rv32_EmitStackPreamble(FILE *out, int32_t initial_sp, bool multib
     emitted += 8;
 
     if (multiboot) {
-        /* Push A1 (x11) onto stack — boot info / device tree pointer
+        /* Push A1 (x11) onto stack, boot info / device tree pointer
          * ADDI sp, sp, -4 : 0xFFC10113
          * SW   a1, 0(sp)  : 0x00B12023 */
         write_i32_le(out, (int32_t)0xFFC10113u); /* ADDI sp, sp, -4 */
@@ -1513,7 +1484,7 @@ static int32_t rv32_EmitDebugLoop(FILE *out) {
     return 8;
 }
 
-/* ---- ArchOps table instances ---- */
+/* ArchOps table instances */
 
 static const ArchOps arch_i386 = {
     .name               = "i386",
@@ -1557,7 +1528,6 @@ static const ArchOps arch_rv32 = {
     .EmitDebugLoop      = rv32_EmitDebugLoop,
 };
 
-/* ------------------------------------------------------------ */
 /* Generic fixup wrappers (delegate to arch) */
 
 static void fixup_call(uint8_t *code, int32_t codeImgBase, int32_t link, int32_t target) {
@@ -1824,7 +1794,67 @@ static void patch_newrec_for_active_objects(Module *m) {
     }
 }
 
-/* ------------------------------------------------------------ */
+/* Detect protected types (those with EXCLUSIVE methods needing NewProtRec).
+ * Scans method code for CALL Lock / CALL Unlock patterns.
+ * Must be called after all modules are loaded and SysFix addresses resolved. */
+
+static void detect_protected_types(void) {
+    if (arch != &arch_i386) return;
+    int32_t lockAddr = SysFix[LockSF].adr;
+    if (lockAddr == 0) return;
+
+    for (Module *m = objectList; m; m = m->link) {
+        for (int32_t i = 0; i < m->nofTds; i++) {
+            TypeDesc *t = m->tdescs[i];
+            if (!t || t->isProtected) continue;
+
+            /* Check each of this type's new methods for CALL Lock */
+            for (int32_t j = 0; j < t->nofNewMethods; j++) {
+                int32_t entryNo = t->newMethods[j].entryNo;
+                if (entryNo < 0 || entryNo >= m->nofEntries) continue;
+                int32_t methodAddr = (int32_t)m->entries[entryNo];
+                int32_t codeOfs = methodAddr - m->codeBase;
+                if (codeOfs < 0 || codeOfs >= m->codeSize) continue;
+
+                /* Scan forward for CALL Lock within reasonable range */
+                int32_t limit = codeOfs + 4000;
+                if (limit > m->codeSize - 5) limit = m->codeSize - 5;
+                for (int32_t k = codeOfs; k <= limit; k++) {
+                    if (m->code[k] != 0xE8) continue;
+                    int32_t rel = get_dword(m->code, k + 1);
+                    int32_t target = m->codeBase + k + 5 + rel;
+                    if (target == lockAddr) {
+                        t->isProtected = true;
+                        log_puts("  Detected protected type: ");
+                        log_puts(m->name); log_puts(".");
+                        log_puts(t->name); log_ln();
+                        goto next_type;
+                    }
+                }
+            }
+            next_type:;
+        }
+    }
+
+    /* Propagate through inheritance: if base type is protected, derived is too */
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (Module *m = objectList; m; m = m->link) {
+            for (int32_t i = 0; i < m->nofTds; i++) {
+                TypeDesc *t = m->tdescs[i];
+                if (t && !t->isProtected && t->baseType && t->baseType->isProtected) {
+                    t->isProtected = true;
+                    log_puts("  Inherited protected: ");
+                    log_puts(m->name); log_puts(".");
+                    log_puts(t->name); log_ln();
+                    changed = true;
+                }
+            }
+        }
+    }
+}
+
 /* Ref table parsing (FindAdr) */
 
 static void get_num_from_refs(const uint8_t *refs, int32_t *i, int32_t *num) {
@@ -1896,7 +1926,6 @@ static int32_t find_adr(Module *mod, const char *pat, int32_t type) {
     return 0;
 }
 
-/* ------------------------------------------------------------ */
 /* Export table utilities */
 
 static void assign_export_sizes(ExportDesc *exp, Module *m) {
@@ -1962,7 +1991,6 @@ static void init_types(Module *m) {
     for (int32_t i = 0; i < m->nofTds; i++) init_type(m, i);
 }
 
-/* ------------------------------------------------------------ */
 /* Object file block readers */
 
 static void expect_tag(FILE *f, uint8_t tag, const char *modName) {
@@ -2249,7 +2277,7 @@ static void read_type(FILE *f, Module *m) {
             for (int32_t j = 0; j < td->nofPtrs; j++) td->ptrOffset[j] = read_i32_le(f);
         }
 
-        /* td size calculations — exact values matching dump_types layout.
+        /* td size calculations, exact values matching dump_types layout.
          * Uses the same address-based j-padding and ArrayBit alignment. */
         assert(((uint32_t)(m->typeTableAdr + m->typeTableSize + 4) % Boundary) == 0);
         { int32_t blockStart = m->typeTableAdr + m->typeTableSize;
@@ -2305,7 +2333,6 @@ static void read_ref(FILE *f, Module *m) {
     read_bytes(f, m->refs, (size_t)m->refSize-1);
 }
 
-/* ------------------------------------------------------------ */
 /* Use block checking (linking imported refs) */
 
 static void check_use_block(FILE *f, Module *M, DataLinkEntry *dataLinks);
@@ -2400,7 +2427,6 @@ static void read_use(FILE *f, Module *m, DataLinkEntry *dataLinks) {
     check_use_block(f, m, dataLinks);
 }
 
-/* ------------------------------------------------------------ */
 /* Dumping / image writing */
 
 static void write_zeros(FILE *out, int32_t n);
@@ -2627,8 +2653,8 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
      * initBlock must be patched via seek since module data is already written.
      *
      * We patch TWO initBlock variables:
-     *   AosModules.initBlock (SYSTEM.PTR) — used by AosLoader to find init code
-     *   AosHeap.initBlock    (PTR)        — GC-traced anchor that keeps the
+     *   AosModules.initBlock (SYSTEM.PTR), used by AosLoader to find init code
+     *   AosHeap.initBlock    (PTR)       , GC-traced anchor that keeps the
      *                                       init block alive across all GC cycles
      *
      * AosModules.initBlock is SYSTEM.PTR (untraced), so the GC never follows it.
@@ -2657,7 +2683,7 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
             log_puts("WARNING: AosModules module not found or has no refs\n");
         }
 
-        /* Patch AosHeap.initBlock — the GC-traced anchor */
+        /* Patch AosHeap.initBlock, the GC-traced anchor */
         Module *heapM = find_module_by_name("AosHeap");
         if (heapM && heapM->refs && heapM->refSize > 0) {
             int32_t initOfs = aos_var_by_name(heapM->refs, heapM->refSize, "initBlock");
@@ -2726,10 +2752,12 @@ static void dump_types(FILE *out, Module *m, int32_t *next) {
          *   TypeDesc+20 (blockStart+24): name[32] (= TypeNameOfs)
          */
         write_i32_le(out, tag);
-        write_i32_le(out, 0);           /* tdSize placeholder — patched below */
+        write_i32_le(out, 0);           /* tdSize placeholder, patched below */
         write_i32_le(out, 0xBFFFFFFC);  /* sentinel = MinPtrOfs-4 (no traced ptrs in RecBlk) */
-        write_i32_le(out, 0);           /* TypeTag placeholder — patched below */
-        write_i32_le(out, t->extlev);   /* flags (extlev in low bits) */
+        write_i32_le(out, 0);           /* TypeTag placeholder, patched below */
+        { uint32_t flags = (uint32_t)t->extlev;
+          if (t->isProtected) flags |= (1u << 31);  /* ProtTypeBit */
+          write_i32_le(out, (int32_t)flags); }   /* flags (extlev in low bits, ProtTypeBit in high bit) */
         write_i32_le(out, m->modDescAdr); /* module pointer (at ModOfs=16) */
         write_bytes(out, t->name, 32);  /* name[32] (at TypeNameOfs=20) */
         *next += 56;
@@ -2912,7 +2940,7 @@ static void dump_modules(FILE *out) {
 
         int32_t modBlkSize = aos_newmodule_block_size();
 
-        /* ---- 1) Module descriptor block (protected object) ---- */
+        /* 1) Module descriptor block (protected object) */
         /* Layout: [tag(4)] [protHdr(AosProtOfs bytes)] [172-byte descriptor] [pad] */
         {
             uint8_t modBlk[256]; /* modBlkSize <= 256 */
@@ -2960,7 +2988,7 @@ static void dump_modules(FILE *out) {
             int32_t dOfs = 4 + AosProtOfs; /* = 52 */
 
             /* AOS Module descriptor fields (172 bytes).
-             * Module = OBJECT (RootObject) — RootObject adds 4-byte placeholder
+             * Module = OBJECT (RootObject), RootObject adds 4-byte placeholder
              * at offset 0, shifting all declared fields by 4.
              * Field order follows AosModules.Mod declaration order.
              * BOOLEAN fields (init, published) are 1 byte each.
@@ -3010,7 +3038,7 @@ static void dump_modules(FILE *out) {
     (buf)[(off)+3] = (uint8_t)(v_ >> 24); \
 } while(0)
 
-            /* placeholder (RootObject base, offset 0) — already 0 from memset */
+            /* placeholder (RootObject base, offset 0), already 0 from memset */
             /* next (link) */
             PUT32(modBlk, dOfs + 4, prevmod);
             /* name */
@@ -3050,10 +3078,10 @@ static void dump_modules(FILE *out) {
             /* publics / privates */
             PUT32(modBlk, dOfs + 120, (uint32_t)m->publics);
             PUT32(modBlk, dOfs + 124, (uint32_t)m->privates);
-            /* imports (count), import (ptr — NIL for boot modules) */
+            /* imports (count), import (ptr, NIL for boot modules) */
             PUT32(modBlk, dOfs + 128, (uint32_t)m->nofimp);
             /* import ptr at 132 = 0 (already zeroed) */
-            /* nofstrc, struct (ptr — NIL) */
+            /* nofstrc, struct (ptr, NIL) */
             PUT32(modBlk, dOfs + 136, (uint32_t)m->nofstrc);
             /* struct ptr at 140 = 0 (already zeroed) */
             /* nofreimp at 144 = 0, reimp ptr at 148 = 0 (already zeroed) */
@@ -3073,7 +3101,7 @@ static void dump_modules(FILE *out) {
             prevmod = m->modDescAdr;
         }
 
-        /* ---- 2) Data arrays block (NewSys) ---- */
+        /* 2) Data arrays block (NewSys) */
         {
             int32_t dataSizePad = m->dataSize + ((-m->dataSize) & 7);
             int32_t subTotal =
@@ -3201,7 +3229,7 @@ static void dump_modules(FILE *out) {
             if (blkPad > 0) write_zeros(out, blkPad);
         }
 
-        /* ---- 3) Export padding + export dump ---- */
+        /* 3) Export padding + export dump */
         {
             /* Use expAdr from load_module_body to stay consistent */
             int32_t next = m->expAdr;
@@ -3213,7 +3241,7 @@ static void dump_modules(FILE *out) {
             /* AOS: export tag = 0 (no expDescSF) */
             dump_export(out, &m->exportTree, &next, 0 | 2);
 
-            /* types — next points 4 bytes into the tag-slot reserved by
+            /* types, next points 4 bytes into the tag-slot reserved by
              * expPadding+4; back up both the address tracker AND the file
              * position so that dump_types writes the type-block tag into
              * the pre-allocated sentinel slot. */
@@ -3222,7 +3250,7 @@ static void dump_modules(FILE *out) {
             dump_types(out, m, &next);
         }
 
-        /* ---- 4) Pad to block-aligned imageSize ---- */
+        /* 4) Pad to block-aligned imageSize */
         {
             int32_t curFilePos = (int32_t)tell_abs(out);
             int32_t expectedEnd = m->base + m->imageSize - imageBase;
@@ -3325,7 +3353,6 @@ static void build_image(const char *fileName, int32_t entryPoint, int32_t base, 
     }
 }
 
-/* ------------------------------------------------------------ */
 /* LoadModule / Load */
 
 static void dump_module_symbols(Module *mod) {
@@ -3416,7 +3443,7 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
     read_export(f, m);
     read_code(f, m);
 
-    /* ---- AOS image layout computation ---- */
+    /* AOS image layout computation */
     m->base = *base;
     insert_module_sorted(m);
 
@@ -3516,7 +3543,7 @@ static void load_module_body(FILE *f, Module *m, int32_t *base) {
         fixup_links(m, links, nofLinks, dataLinks);
         patch_newrec_for_active_objects(m);
 
-        /* SELF pointer at beginning of constants — only for old OP2 (csize=4).
+        /* SELF pointer at beginning of constants, only for old OP2 (csize=4).
          * With --aos compiler (csize=0), const[0] holds real data; skip SELF. */
         /* put_dword(m->data + m->dataSize, 0, m->modDescAdr); */
 
@@ -3621,7 +3648,6 @@ static void load_module(Module **m_out, const char *name, int32_t *base) {
     *m_out = m;
 }
 
-/* ------------------------------------------------------------ */
 /* CLI */
 
 typedef struct {
@@ -3818,7 +3844,6 @@ static Options parse_args(int argc, char **argv) {
     return opt;
 }
 
-/* ------------------------------------------------------------ */
 /* Main */
 
 int main(int argc, char **argv) {
@@ -3892,6 +3917,10 @@ int main(int argc, char **argv) {
             halt_msg("Procedure in --command not found");
         }
     }
+
+    /* Detect protected types (those with EXCLUSIVE methods) across all modules.
+     * Must run after all modules loaded so SysFix[LockSF] is resolved. */
+    detect_protected_types();
 
     /* imageSize tracks total image extent relative to imageBase.
      * load_module_body updates *base but not the global imageSize,
