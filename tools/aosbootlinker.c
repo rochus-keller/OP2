@@ -136,6 +136,8 @@ typedef struct {
 } ArrayDesc;
 
 enum { ArrayDescSize = 16, TagSize = 4 };
+/* AosHeap flag-bit values (bit indices in the block/tag word): ArrayBit=1 -> 2 */
+enum { AosArrayBit = 2 };
 
 typedef struct {
     Name name;
@@ -2536,14 +2538,10 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
         }
     }
 
-    /* Per-module debug markers: 4 bytes each (MOV AL,ch; OUT 0xE9,AL) on i386 */
-    int32_t perModuleMarkerSize = (arch == &arch_i386) ? 4 : 0;
-    /* 'K' marker + one marker before each body call + one before Terminate */
-    int32_t totalMarkerCount = 1 + nofEntryPoints + 1;
-    int32_t debugMarkerSize = (arch == &arch_i386) ? (totalMarkerCount * 4) : 0;
+    /* Per-module debug markers (bring-up only) have been removed. */
 
     /* +1 call for AosActive.Terminate at the end */
-    int32_t initCodeSize = (nofEntryPoints + 1) * arch->call_instr_size + arch->halt_seq_size + preamble_size + debugMarkerSize;
+    int32_t initCodeSize = (nofEntryPoints + 1) * arch->call_instr_size + arch->halt_seq_size + preamble_size;
 
     /* AOS: init code is wrapped in a NewSys block */
     int32_t blkSize = aos_newsys_block_size(initCodeSize);
@@ -2588,39 +2586,17 @@ static void dump_init_calls(FILE *out, int32_t *entry, int32_t stack_size, int32
         pc += emitted;
     }
 
-    /* Early debug marker: emit 'K' to QEMU debug console (port 0xE9) */
-    if (arch == &arch_i386) {
-        write_u8(out, 0xB0); write_u8(out, 'K');  /* MOV AL, 'K' */
-        write_u8(out, 0xE6); write_u8(out, 0xE9); /* OUT 0xE9, AL */
-        pc += 4;
-    }
-
     /* Call module bodies */
     InitPointNode *ip = initPointList;
-    int modIdx = 0;
     while (ip) {
-        /* Per-module debug marker: emit '0'+modIdx to port 0xE9 */
-        if (arch == &arch_i386) {
-            char ch = (modIdx < 10) ? ('0' + modIdx) : ('A' + modIdx - 10);
-            write_u8(out, 0xB0); write_u8(out, (uint8_t)ch);  /* MOV AL, ch */
-            write_u8(out, 0xE6); write_u8(out, 0xE9);         /* OUT 0xE9, AL */
-            pc += perModuleMarkerSize;
-        }
         log_puts("Body at "); log_hex(ip->entryPoint); log_ln();
         arch->WriteCallInstruction(out, ip->entryPoint, pc);
         pc += arch->call_instr_size;
         ip = ip->next;
-        modIdx++;
     }
 
     /* 6) AOS: Call AosActive.Terminate */
     {
-        /* Marker before Terminate call */
-        if (arch == &arch_i386) {
-            write_u8(out, 0xB0); write_u8(out, 'T');  /* MOV AL, 'T' */
-            write_u8(out, 0xE6); write_u8(out, 0xE9); /* OUT 0xE9, AL */
-            pc += perModuleMarkerSize;
-        }
         Module *activeM = find_module_by_name("AosActive");
         if (activeM) {
             int32_t termAdr = find_command_adr(activeM, "Terminate");
@@ -2856,10 +2832,16 @@ static void dump_export(FILE *out, ExportDesc *exp, int32_t *next, int32_t tag) 
     assert(exp->dsc[0].Adr == *next);
     write_i32_le(out, tag);
 
+    /* Runtime pointer P = Adr + TagSize (tag sits at Adr, so P-4 = tag).
+     * Layout from P (mirrors AosHeap.NewArr ArrayBlk):
+     *   P[0]  = lastElemToMark (a), P[4] = reserved/NIL (b),
+     *   P[8]  = firstElem (c),      P[12] = len,
+     *   elements start at Adr + TagSize + ArrayDescSize (= P + 16). */
+    int32_t firstElem = exp->dsc[0].Adr + TagSize + ArrayDescSize;
     ArrayDesc arrHdr;
-    arrHdr.a = exp->dsc[0].Adr + (num - 1) * 16 + ArrayDescSize;
-    arrHdr.b = 0;
-    arrHdr.c = exp->dsc[0].Adr + ArrayDescSize;
+    arrHdr.a = firstElem + (num - 1) * 16;   /* lastElemToMark */
+    arrHdr.b = 0;                            /* reserved for Mark */
+    arrHdr.c = firstElem;                    /* firstElem */
     arrHdr.len = num;
 
     write_i32_le(out, arrHdr.a);
@@ -2873,7 +2855,7 @@ static void dump_export(FILE *out, ExportDesc *exp, int32_t *next, int32_t tag) 
         write_u16_le(out, (uint16_t)exp->dsc[i].nofExp);
         write_u16_le(out, 0);
         if (exp->dsc[i].nofExp == 0) write_i32_le(out, 0);
-        else write_i32_le(out, exp->dsc[i].dsc[0].Adr);
+        else write_i32_le(out, exp->dsc[i].dsc[0].Adr + TagSize);  /* runtime ptr = Adr+tag */
     }
 
     insert_pad(out, next, TagSize + ArrayDescSize + num * 16, 32);
@@ -2930,6 +2912,28 @@ static void dump_modules(FILE *out) {
         }
         if (moduleTypeTag == 0)
             log_puts("WARNING: AosModules.Module type descriptor not found\n");
+    }
+
+    /* Find AosModules.ExportDesc type descriptor.  Its ADR(recSize) (= tdAdr+4)
+     * is the element tag for the export descriptor arrays we emit; with the
+     * ArrayBit set it lets the GC Mark walk the export arrays exactly like the
+     * ones AosLoader builds via NewArr.  Without a real element tag the GC
+     * cannot traverse export.dsc (it would read a bogus type descriptor). */
+    int32_t exportDescTag = 0;
+    {
+        Module *modsM = find_module_by_name("AosModules");
+        if (modsM) {
+            for (int32_t i = 0; i < modsM->nofTds; i++) {
+                if (strcmp(modsM->tdescs[i]->name, "ExportDesc") == 0) {
+                    exportDescTag = (modsM->tdescs[i]->tdAdr + 4) | AosArrayBit;
+                    log_puts("ExportDesc array tag = ");
+                    log_hex(exportDescTag); log_ln();
+                    break;
+                }
+            }
+        }
+        if (exportDescTag == 0)
+            log_puts("WARNING: AosModules.ExportDesc type descriptor not found\n");
     }
 
     while (m) {
@@ -3089,11 +3093,15 @@ static void dump_modules(FILE *out) {
             PUT32(modBlk, dOfs + 152, (uint32_t)m->exportTree.fp);
             PUT32(modBlk, dOfs + 156, (uint32_t)m->exportTree.adr);
             PUT32(modBlk, dOfs + 160, (uint32_t)m->exportTree.nofExp);
-            /* export.dsc = NIL: the export section is inside the SysBlk (not a
-             * standalone heap block), so Mark cannot follow it safely.  The
-             * export descriptor is only needed by the dynamic module loader,
-             * which is not used for boot-linked modules. */
-            PUT32(modBlk, dOfs + 164, 0);
+            /* export.dsc: runtime pointer to the export descriptor array emitted
+             * by dump_export.  P = dsc[0].Adr + TagSize (tag lives at Adr, so
+             * P-4 = tag).  The array now carries a valid ExportDesc element tag,
+             * so the GC can mark it and the dynamic loader can resolve imported
+             * symbols' fingerprints/addresses from boot-linked modules. */
+            if (m->exportTree.nofExp > 0)
+                PUT32(modBlk, dOfs + 164, (uint32_t)(m->exportTree.dsc[0].Adr + TagSize));
+            else
+                PUT32(modBlk, dOfs + 164, 0);
             /* term at 168 = 0 (already zeroed) */
 #undef PUT32
 
@@ -3238,8 +3246,9 @@ static void dump_modules(FILE *out) {
             write_bytes(out, padding, (size_t)(m->expPadding + 4));
             next += 4; /* advance past sentinel to expAdr+4 (32-aligned) */
             assert(((uint32_t)next % 32) == 0);
-            /* AOS: export tag = 0 (no expDescSF) */
-            dump_export(out, &m->exportTree, &next, 0 | 2);
+            /* Export arrays carry the real AosModules.ExportDesc element tag
+             * (with ArrayBit) so the GC can mark them like NewArr-built arrays. */
+            dump_export(out, &m->exportTree, &next, exportDescTag);
 
             /* types, next points 4 bytes into the tag-slot reserved by
              * expPadding+4; back up both the address tracker AND the file

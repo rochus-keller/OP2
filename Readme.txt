@@ -14,7 +14,7 @@ Changes
 - Refactored OPC and OPL; OPC is now fully target independent; IR defs and data in new OPIR, no longer in OPL.
 - Added ARMv7 backend compatible with Raspberry Pi Model 3b and Zero 2
 - Added RV32 backend compatible with Olimex ESP32-P4-PC
-- Added changes necessary to compile and (hopefully) run the AOS 2004 inner core
+- Added changes necessary to compile and run the AOS 2004 
 
 The .Mod files can be transpiled to C99 files using the AoCodeNavigator or OberonIDE; 
 these files are put into the c99 directory and built with the corresponding build.sh. 
@@ -28,5 +28,8 @@ which make it useful for other projects than the Oberon System. It can generate 
 Multiboot header and add stack initialization. With this, e.g. the MainLoop testcase 
 together with the RawOut module work well on QEMU. Newer versions of the bootlinker
 include multi-target support.
+
+The aosbootlinker is an extension of the bootlinker used to link the AOS inner core,
+emulating the AOS memory allocator.
 
 NOTE that the RV32 backend is WORK-IN-PROGRESS
