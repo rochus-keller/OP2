@@ -351,6 +351,14 @@ MODULE OPL; (** non-portable *)
      lrealHi[r] = -1 means no hi-word companion for register r. *)
   lrealHi: ARRAY 32 OF SHORTINT;
 
+  (* Floating-point function results are returned in f0 (see GetFreg, which
+     allocates from f1 upwards). currentProcRetForm is the form of the result
+     of the procedure being generated, lastFstoreFreg the register used by the
+     last Fstore, needed when the result was stored to a local before RETURN. *)
+  currentProcRetForm: SHORTINT;
+  lastFstoreFreg: SHORTINT;
+
+
  PROCEDURE ClearLRealHi;
   VAR i: SHORTINT;
  BEGIN
@@ -1341,8 +1349,14 @@ MODULE OPL; (** non-portable *)
    FindReg(instr.src2, base);
    inx := none; disp := noDisp
   END;
-  AssignReg(instr.dest, src, base, inx);
-  IF instr.reg # src THEN OPO.GenMOV(instr.reg, src) END;
+  IF (src = SP) & ((op = Add) OR (op = Sub)) THEN
+   (* stack pointer arithmetic (OPC's Stack item): SP is destination and
+      source, i.e. the stack pointer itself has to be adjusted *)
+   OPIR.Instr[instr.dest].reg := SP
+  ELSE
+   AssignReg(instr.dest, src, base, inx);
+   IF instr.reg # src THEN OPO.GenMOV(instr.reg, src) END
+  END;
   CASE op OF
    Add:
     IF mode = ImmReg THEN EmitAddImm(instr.reg, instr.reg, instr.src2)
@@ -1718,8 +1732,8 @@ MODULE OPL; (** non-portable *)
 
  PROCEDURE GenRepMovs(VAR instr: Instruction);
  (* repMovs: block memory copy *)
-  VAR dest, src, nofElem: SHORTINT; Lloop: LONGINT;
-    step: LONGINT; reverse, stackPush: BOOLEAN;
+  VAR dest, src, nofElem, tmp: SHORTINT; Lloop: LONGINT;
+    step: LONGINT; reverse: BOOLEAN;
  BEGIN
   IF loaded(instr.dest) THEN FindReg(instr.dest, dest) ELSE FindLoadReg(instr.dest, dest) END;
   IF loaded(instr.src1) THEN FindReg(instr.src1, src) ELSE FindLoadReg(instr.src1, src) END;
@@ -1730,29 +1744,16 @@ MODULE OPL; (** non-portable *)
   ELSE step := 1
   END;
   IF reverse THEN step := -step END;
-  stackPush := ~reverse & (dest = SP);
-  IF stackPush THEN
-   IF step = 4 THEN
-    OPO.GenSLLI(T0, nofElem, 2);
-    OPO.GenADD(src, src, T0)
-   ELSIF step = 2 THEN
-    OPO.GenSLLI(T0, nofElem, 1);
-    OPO.GenADD(src, src, T0)
-   ELSE
-    OPO.GenADD(src, src, nofElem)
-   END
+  (* The destination pointer is advanced by the loop; if it is SP (the block
+     is copied to the stack area reserved by a preceding sub) a scratch
+     register has to be used instead. *)
+  tmp := none;
+  IF ~IsAllocatable(dest) THEN
+   GetReg(tmp); OPO.GenMOV(tmp, dest); dest := tmp
   END;
   OPO.GenBEQ(nofElem, X0, 6*4);
   Lloop := OPO.pc;
-  IF stackPush THEN
-   OPO.GenADDI(src, src, -step);
-   OPO.GenADDI(dest, dest, -step);
-   IF (step = 4) OR (step = -4) THEN
-    OPO.GenLW(T0, src, 0); OPO.GenSW(T0, dest, 0)
-   ELSE
-    OPO.GenLBU(T0, src, 0); OPO.GenSB(T0, dest, 0)
-   END
-  ELSIF (ABS(step) = 4) THEN
+  IF (ABS(step) = 4) THEN
    OPO.GenLW(T0, src, 0); OPO.GenSW(T0, dest, 0);
    OPO.GenADDI(src, src, step); OPO.GenADDI(dest, dest, step)
   ELSIF (ABS(step) = 2) THEN
@@ -1764,6 +1765,7 @@ MODULE OPL; (** non-portable *)
   END;
   OPO.GenADDI(nofElem, nofElem, -1);
   OPO.GenBNE(nofElem, X0, Lloop - OPO.pc);
+  IF tmp # none THEN FreeReg(tmp) END;
   DecReg(dest); DecReg(src); DecReg(nofElem)
  END GenRepMovs;
 
@@ -1887,11 +1889,34 @@ MODULE OPL; (** non-portable *)
   op := instr.op DIV 32;
   FindMemReg(instr, mode, size, base, inx, disp);
   IF IsSinglePrec(instr) & (op = Fild) THEN
-   (* Single-precision integer-to-float: FCVT.S.W *)
+   (* Single-precision integer-to-float: load the integer, then FCVT.S.W *)
+   IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
+    OPO.EmitAbsLoad(T0, disp, slotOff);
+    AbsAccess(instr.node, slotOff);
+    IF inx > none THEN
+     IF instr.scale > 0 THEN
+      OPO.GenSLLI(T1, inx, instr.scale);
+      OPO.GenADD(T0, T0, T1)
+     ELSE
+      OPO.GenADD(T0, T0, inx)
+     END
+    END;
+    OPO.GenLW(T0, T0, 0)
+   ELSIF inx > none THEN
+    IF instr.scale > 0 THEN
+     OPO.GenSLLI(T0, inx, instr.scale);
+     OPO.GenADD(T0, base, T0)
+    ELSE
+     OPO.GenADD(T0, base, inx)
+    END;
+    EmitLoad(T0, T0, disp, Bit32)
+   ELSIF mode = ImmReg THEN
+    OPO.LoadImm32(T0, instr.src2)
+   ELSE
+    EmitLoad(T0, base, disp, Bit32)
+   END;
    AssignFreg(instr.dest);
-   FindLoadReg(instr.src1, base);
-   OPO.GenFCVTSW(instr.reg, base, 0); (* rm=0: RNE = round nearest even *)
-   DecReg(base)
+   OPO.GenFCVTSW(instr.reg, T0, 0) (* rm=0: RNE = round nearest even *)
   ELSIF IsSinglePrec(instr) THEN
    (* Single precision: use hardware FPU register *)
    AssignFreg(instr.dest);
@@ -1981,7 +2006,7 @@ MODULE OPL; (** non-portable *)
   FindMemReg(instr, mode, size, base, inx, disp);
   IF IsSinglePrec(instr) & (op = Fist) THEN
    (* Single-precision REAL to integer: FCVT.W.S *)
-   FindFreg(instr.src1, freg);
+   FindFreg(instr.dest, freg);
    OPO.GenFCVTWS(T0, freg, 1); (* rm=1: RTZ = truncate toward zero *)
    DecCheckFreg(freg);
    IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
@@ -1992,7 +2017,8 @@ MODULE OPL; (** non-portable *)
     EmitStore(T0, base, disp, Bit32)
    END
   ELSIF IsSinglePrec(instr) THEN
-   FindFreg(instr.src1, freg);
+   FindFreg(instr.dest, freg);
+   lastFstoreFreg := freg;
    IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
     OPO.EmitAbsLoad(T0, disp, slotOff);
     AbsAccess(instr.node, slotOff);
@@ -2364,7 +2390,12 @@ MODULE OPL; (** non-portable *)
    INC(i)
   END;
   (* Set result register *)
-  IF size = Bit8 THEN
+  IF (instr.hint # noHint) & IsSinglePrec(instr) THEN
+   (* REAL result: the callee left it in f0 *)
+   AssignFreg(instr.dest);
+   FindFreg(instr.dest, i);
+   IF i # 0 THEN OPO.GenFSGNJS(i, 0, 0) END
+  ELSIF size = Bit8 THEN
    regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0
   ELSIF (size = Bit16) OR (size = Bit32) THEN
    regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0
@@ -2509,6 +2540,7 @@ MODULE OPL; (** non-portable *)
   END;
   RegErr := FALSE;
   nofFwdFixups := 0;
+  currentProcRetForm := 0; lastFstoreFreg := -1;
   i := 0;
   WHILE ~OPO.CodeErr & ~RegErr & (i < pSize) DO
    node := OPIR.Instr[i].node;
@@ -2594,10 +2626,25 @@ MODULE OPL; (** non-portable *)
        list := NIL;
        sysflag := 0
       END;
+      IF (node # NIL) & (node.obj.typ # NIL) THEN currentProcRetForm := node.obj.typ.form
+      ELSE currentProcRetForm := 0
+      END;
+      lastFstoreFreg := -1;
       GenEnter(OPIR.Instr[i].src2, list, sysflag)
      | Leave:
       (* leave: procedure epilogue (without ret)
          RV32: MV sp, s0; LW s0, 0(sp); LW ra, 4(sp); ADDI sp, sp, 8 *)
+      (* A REAL result is returned in f0; it is still in the register the
+         result expression was computed in, or, if it was stored to a local
+         first, in the register of the last Fstore. *)
+      IF currentProcRetForm = Real THEN
+       k := 1;
+       WHILE (k < MaxFRegs) & (fregTab[k] = free) DO INC(k) END;
+       IF k < MaxFRegs THEN OPO.GenFSGNJS(0, k, k)
+       ELSIF lastFstoreFreg > 0 THEN OPO.GenFSGNJS(0, lastFstoreFreg, lastFstoreFreg)
+       END
+      END;
+      currentProcRetForm := 0; lastFstoreFreg := -1;
       OPO.GenMOV(SP, FP);
       OPO.GenLW(FP, SP, 0);
       OPO.GenLW(RA, SP, 4);
