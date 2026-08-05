@@ -666,7 +666,11 @@ MODULE OPL; (** non-portable *)
    disp := noDisp; inx := none
   ELSE (* ImmReg *)
    base := noBase; disp := noDisp; inx := none
-  END
+  END;
+  (* An absolute address (SYSTEM.GET/PUT/BIT of a constant address) has no base
+     register; RV32 uses the zero register, whereas noBase = -1 would end up in
+     the rs1 field as x31, i.e. the comparison scratch register T6. *)
+  IF (base = noBase) & instr.abs THEN base := X0 END
  END FindMemReg;
 
 
@@ -917,58 +921,82 @@ MODULE OPL; (** non-portable *)
  BEGIN RETURN (imm >= -2048) & (imm <= 2047)
  END FitsImm12;
 
+ PROCEDURE Scratch(r1, r2: LONGINT): LONGINT;
+ (* T0 is the usual scratch register for large immediates, but an indexed
+    access has the computed address in T0 and a stored immediate may be in it
+    as well, so pick a register which is neither of the two operands *)
+  VAR s: LONGINT;
+ BEGIN
+  IF (r1 # T0) & (r2 # T0) THEN s := T0
+  ELSIF (r1 # T1) & (r2 # T1) THEN s := T1
+  ELSE s := T2
+  END;
+  RETURN s
+ END Scratch;
+
  PROCEDURE EmitAddImm(Rd, Rn: LONGINT; imm: LONGINT);
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(imm) THEN
    OPO.GenADDI(Rd, Rn, imm)
   ELSE
-   OPO.LoadImm32(T0, imm);
-   OPO.GenADD(Rd, Rn, T0)
+   s := Scratch(Rd, Rn);
+   OPO.LoadImm32(s, imm);
+   OPO.GenADD(Rd, Rn, s)
   END
  END EmitAddImm;
 
  PROCEDURE EmitSubImm(Rd, Rn: LONGINT; imm: LONGINT);
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(-imm) THEN
    OPO.GenADDI(Rd, Rn, -imm)
   ELSE
-   OPO.LoadImm32(T0, imm);
-   OPO.GenSUB(Rd, Rn, T0)
+   s := Scratch(Rd, Rn);
+   OPO.LoadImm32(s, imm);
+   OPO.GenSUB(Rd, Rn, s)
   END
  END EmitSubImm;
 
  PROCEDURE EmitAndImm(Rd, Rn: LONGINT; imm: LONGINT);
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(imm) THEN
    OPO.GenANDI(Rd, Rn, imm)
   ELSE
-   OPO.LoadImm32(T0, imm);
-   OPO.GenAND(Rd, Rn, T0)
+   s := Scratch(Rd, Rn);
+   OPO.LoadImm32(s, imm);
+   OPO.GenAND(Rd, Rn, s)
   END
  END EmitAndImm;
 
  PROCEDURE EmitOrImm(Rd, Rn: LONGINT; imm: LONGINT);
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(imm) THEN
    OPO.GenORI(Rd, Rn, imm)
   ELSE
-   OPO.LoadImm32(T0, imm);
-   OPO.GenOR(Rd, Rn, T0)
+   s := Scratch(Rd, Rn);
+   OPO.LoadImm32(s, imm);
+   OPO.GenOR(Rd, Rn, s)
   END
  END EmitOrImm;
 
  PROCEDURE EmitXorImm(Rd, Rn: LONGINT; imm: LONGINT);
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(imm) THEN
    OPO.GenXORI(Rd, Rn, imm)
   ELSE
-   OPO.LoadImm32(T0, imm);
-   OPO.GenXOR(Rd, Rn, T0)
+   s := Scratch(Rd, Rn);
+   OPO.LoadImm32(s, imm);
+   OPO.GenXOR(Rd, Rn, s)
   END
  END EmitXorImm;
 
  PROCEDURE EmitLoad(rd, base: LONGINT; disp: LONGINT; size: SHORTINT);
- (* Load from memory, handling large displacements via T0 *)
+ (* Load from memory, handling large displacements via a scratch register *)
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(disp) THEN
    IF size = Bit8 THEN OPO.GenLBU(rd, base, disp)
@@ -976,17 +1004,19 @@ MODULE OPL; (** non-portable *)
    ELSE OPO.GenLW(rd, base, disp)
    END
   ELSE
-   OPO.LoadImm32(T0, disp);
-   OPO.GenADD(T0, base, T0);
-   IF size = Bit8 THEN OPO.GenLBU(rd, T0, 0)
-   ELSIF size = Bit16 THEN OPO.GenLHU(rd, T0, 0)
-   ELSE OPO.GenLW(rd, T0, 0)
+   s := Scratch(rd, base);
+   OPO.LoadImm32(s, disp);
+   OPO.GenADD(s, base, s);
+   IF size = Bit8 THEN OPO.GenLBU(rd, s, 0)
+   ELSIF size = Bit16 THEN OPO.GenLHU(rd, s, 0)
+   ELSE OPO.GenLW(rd, s, 0)
    END
   END
  END EmitLoad;
 
  PROCEDURE EmitLoadSigned(rd, base: LONGINT; disp: LONGINT; size: SHORTINT);
  (* Load from memory with sign extension *)
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(disp) THEN
    IF size = Bit8 THEN OPO.GenLB(rd, base, disp)
@@ -994,17 +1024,19 @@ MODULE OPL; (** non-portable *)
    ELSE OPO.GenLW(rd, base, disp)
    END
   ELSE
-   OPO.LoadImm32(T0, disp);
-   OPO.GenADD(T0, base, T0);
-   IF size = Bit8 THEN OPO.GenLB(rd, T0, 0)
-   ELSIF size = Bit16 THEN OPO.GenLH(rd, T0, 0)
-   ELSE OPO.GenLW(rd, T0, 0)
+   s := Scratch(rd, base);
+   OPO.LoadImm32(s, disp);
+   OPO.GenADD(s, base, s);
+   IF size = Bit8 THEN OPO.GenLB(rd, s, 0)
+   ELSIF size = Bit16 THEN OPO.GenLH(rd, s, 0)
+   ELSE OPO.GenLW(rd, s, 0)
    END
   END
  END EmitLoadSigned;
 
  PROCEDURE EmitStore(rs, base: LONGINT; disp: LONGINT; size: SHORTINT);
- (* Store to memory, handling large displacements via T0 *)
+ (* Store to memory, handling large displacements via a scratch register *)
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(disp) THEN
    IF size = Bit8 THEN OPO.GenSB(rs, base, disp)
@@ -1012,36 +1044,41 @@ MODULE OPL; (** non-portable *)
    ELSE OPO.GenSW(rs, base, disp)
    END
   ELSE
-   OPO.LoadImm32(T0, disp);
-   OPO.GenADD(T0, base, T0);
-   IF size = Bit8 THEN OPO.GenSB(rs, T0, 0)
-   ELSIF size = Bit16 THEN OPO.GenSH(rs, T0, 0)
-   ELSE OPO.GenSW(rs, T0, 0)
+   s := Scratch(rs, base);
+   OPO.LoadImm32(s, disp);
+   OPO.GenADD(s, base, s);
+   IF size = Bit8 THEN OPO.GenSB(rs, s, 0)
+   ELSIF size = Bit16 THEN OPO.GenSH(rs, s, 0)
+   ELSE OPO.GenSW(rs, s, 0)
    END
   END
  END EmitStore;
 
  PROCEDURE EmitFLoad(frd, base: LONGINT; disp: LONGINT);
  (* FLW frd, disp(base) - handling large displacements *)
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(disp) THEN
    OPO.GenFLW(frd, base, disp)
   ELSE
-   OPO.LoadImm32(T0, disp);
-   OPO.GenADD(T0, base, T0);
-   OPO.GenFLW(frd, T0, 0)
+   s := Scratch(base, base);
+   OPO.LoadImm32(s, disp);
+   OPO.GenADD(s, base, s);
+   OPO.GenFLW(frd, s, 0)
   END
  END EmitFLoad;
 
  PROCEDURE EmitFStore(frs, base: LONGINT; disp: LONGINT);
  (* FSW frs, disp(base) - handling large displacements *)
+  VAR s: LONGINT;
  BEGIN
   IF FitsImm12(disp) THEN
    OPO.GenFSW(frs, base, disp)
   ELSE
-   OPO.LoadImm32(T0, disp);
-   OPO.GenADD(T0, base, T0);
-   OPO.GenFSW(frs, T0, 0)
+   s := Scratch(base, base);
+   OPO.LoadImm32(s, disp);
+   OPO.GenADD(s, base, s);
+   OPO.GenFSW(frs, s, 0)
   END
  END EmitFStore;
 
@@ -1647,9 +1684,10 @@ MODULE OPL; (** non-portable *)
     OPO.GenSLTU(instr.reg, T6, T5);
     OPO.GenXORI(instr.reg, instr.reg, 1)
    | Setc:
-    OPO.GenSLTU(instr.reg, T5, T6)
+    (* after bt, T5 is the tested bit and T6 is zero *)
+    OPO.GenSLTU(instr.reg, T6, T5)
    | Setnc:
-    OPO.GenSLTU(instr.reg, T5, T6);
+    OPO.GenSLTU(instr.reg, T6, T5);
     OPO.GenXORI(instr.reg, instr.reg, 1)
   ELSE HALT(BUG)
   END

@@ -189,8 +189,8 @@ MODULE OPO;
   ccHS*  = 7;   (* BGEU t5, t6 ? unsigned higher or same *)
   ccLO*  = 8;   (* BLTU t5, t6 ? unsigned lower *)
   ccLS*  = 9;   (* BGEU t6, t5 ? unsigned lower or same, swapped *)
-  ccCS*  = 10;  (* BLTU t5, t6 ? carry set = unsigned lower *)
-  ccCC*  = 11;  (* BGEU t5, t6 ? carry clear = unsigned higher or same *)
+  ccCS*  = 10;  (* BNE t5, t6 ? carry set, i.e. the bit tested by bt is set *)
+  ccCC*  = 11;  (* BEQ t5, t6 ? carry clear *)
   ccAL*  = 255; (* unconditional: JAL x0 *)
 
  TYPE
@@ -672,8 +672,8 @@ MODULE OPO;
   | ccHS: GenBGEU(T5, T6, offset)     (* unsigned higher or same *)
   | ccLO: GenBLTU(T5, T6, offset)     (* unsigned lower *)
   | ccLS: GenBGEU(T6, T5, offset)     (* unsigned lower or same, swapped *)
-  | ccCS: GenBLTU(T5, T6, offset)     (* carry set *)
-  | ccCC: GenBGEU(T5, T6, offset)     (* carry clear *)
+  | ccCS: GenBNE(T5, T6, offset)      (* carry set: after bt, T5 is the tested bit and T6 is zero *)
+  | ccCC: GenBEQ(T5, T6, offset)      (* carry clear *)
   ELSE HALT(BUG)
   END
  END EmitCondBranch;

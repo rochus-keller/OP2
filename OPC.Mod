@@ -1479,6 +1479,15 @@ Intel i386 :
  BEGIN 
   CASE subcl OF
    bit:
+(* TODO: SYSTEM.BIT with a constant address needs the abs flag, as in SYSgetput.
+   Mem turns a constant address into mode Abs and load emits the address load,
+   but nothing sets OPIR.Instr [pc-1].abs, so the backend treats the constant as
+   a module data offset and the linker relocates it: SYSTEM.BIT(-44, 0) polls
+   the own module data at -44 instead of the I/O word at absolute address -44.
+   The fix is the same one line as in SYSgetput, i.e. remember
+   constAddr := x.mode = Con before Mem (x) and add after load (x):
+     OPIR.Instr [pc-1].abs := constAddr
+   Work-around until fixed: read the whole word with SYSTEM.GET and test the bit with ODD. *)
     Mem (x); load (x);
     IF y.mode # Con THEN load (y) END;
     GenFlags (bt, x, y);
