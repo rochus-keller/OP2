@@ -808,13 +808,49 @@ MODULE OPA; (** non-portable *)
   END
  END InsertFix;
 
+ PROCEDURE StreamGet(at: LONGINT): CHAR;
+  (* byte at absolute code stream offset 'at'; nodes hold max 255 bytes *)
+  VAR n: OPT.Node; off: LONGINT;
+ BEGIN
+  n := first; off := at;
+  WHILE off >= ORD(n.conval.ext[0]) DO
+   off := off - ORD(n.conval.ext[0]); n := n.link
+  END;
+  RETURN n.conval.ext[off + 1]
+ END StreamGet;
+
+ PROCEDURE StreamPut(at, b: LONGINT);
+  VAR n: OPT.Node; off: LONGINT;
+ BEGIN
+  n := first; off := at;
+  WHILE off >= ORD(n.conval.ext[0]) DO
+   off := off - ORD(n.conval.ext[0]); n := n.link
+  END;
+  n.conval.ext[off + 1] := CHR(b)
+ END StreamPut;
+
  PROCEDURE FixDisp(VAR fix: FixPnt);
-  VAR pos: LONGINT; disp, i: LONGINT;
+  VAR instr, disp, opcode, i: LONGINT;
  BEGIN
   disp := pc - fix.pc;
+  instr := ORD(StreamGet(fix.pc)) + ORD(StreamGet(fix.pc + 1)) * 100H +
+   ORD(StreamGet(fix.pc + 2)) * 10000H + ORD(StreamGet(fix.pc + 3)) * 1000000H;
+  opcode := AND(instr, 7FH);
+  IF opcode = opBRANCH THEN (* imm[12|11|10:5|4:1] at 31|7|30:25|11:8 *)
+   instr := instr + (disp DIV 1000H MOD 2) * 80000000H +
+    (disp DIV 20H MOD 40H) * 2000000H +
+    (disp DIV 2 MOD 10H) * 100H +
+    (disp DIV 800H MOD 2) * 80H
+  ELSIF opcode = opJAL THEN (* imm[20|10:1|11|19:12] at 31|30:21|20|19:12 *)
+   instr := instr + (disp DIV 100000H MOD 2) * 80000000H +
+    (disp DIV 2 MOD 400H) * 200000H +
+    (disp DIV 800H MOD 2) * 100000H +
+    (disp DIV 1000H MOD 100H) * 1000H
+  ELSE (* .word fwd label: store absolute address *)
+   instr := pc
+  END;
   FOR i := 0 TO 3 DO
-   fix.node.conval.ext[fix.pos + i] := CHR(disp MOD 256);
-   disp := disp DIV 256
+   StreamPut(fix.pc + i, instr MOD 256); instr := instr DIV 256
   END
  END FixDisp;
 
