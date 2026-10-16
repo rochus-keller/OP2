@@ -1119,14 +1119,25 @@ MODULE OPL; (** non-portable *)
      The linker patches the constant pool / LUI+ADDI with the final address.
      NOTE: Must come before indexed-access code because base=noBase (-1). *)
   IF (mode IN {RegMem, MemReg}) & (base = noBase) & ~instr.abs THEN
-   OPO.EmitAbsLoad(instr.reg, disp, slotOff);
+   IF op = PUTreg THEN
+    (* no destination register is allocated for putReg; T0 holds the
+       absolute address and the value is loaded into the physical
+       register given by instr.hint *)
+    OPO.EmitAbsLoad(T0, disp, slotOff)
+   ELSE
+    OPO.EmitAbsLoad(instr.reg, disp, slotOff)
+   END;
    AbsAccess(instr.node, slotOff);
    IF inx > none THEN
     IF instr.scale > 0 THEN
-     OPO.GenSLLI(T0, inx, instr.scale);
-     OPO.GenADD(instr.reg, instr.reg, T0)
+     OPO.GenSLLI(T1, inx, instr.scale);
+     IF op = PUTreg THEN OPO.GenADD(T0, T0, T1)
+     ELSE OPO.GenADD(instr.reg, instr.reg, T1)
+     END
     ELSE
-     OPO.GenADD(instr.reg, instr.reg, inx)
+     IF op = PUTreg THEN OPO.GenADD(T0, T0, inx)
+     ELSE OPO.GenADD(instr.reg, instr.reg, inx)
+     END
     END
    END;
    CASE op OF
@@ -1140,6 +1151,8 @@ MODULE OPL; (** non-portable *)
     | Ldwdw: OPO.GenLH(instr.reg, instr.reg, 0)
     | Ldbdwu, Ldbwu: OPO.GenLBU(instr.reg, instr.reg, 0)
     | Ldwdwu: OPO.GenLHU(instr.reg, instr.reg, 0)
+    | PUTreg:
+     EmitLoad(SHORT(SHORT(instr.hint)), T0, 0, size)
    ELSE HALT(BUG)
    END;
    dummy := none;
@@ -1203,12 +1216,18 @@ MODULE OPL; (** non-portable *)
      EmitLoad(instr.reg, memBase, disp, Bit16)
     END
    | PUTreg:
+    (* SYSTEM.PUTREG(n, x): x -> physical register n (in instr.hint).
+       x register-resident: move; memory-resident: load the VALUE (the
+       old code moved the address register, i.e. putReg(var) stored
+       the variable's frame address, not its contents). *)
     IF mode = ImmReg THEN
      OPO.LoadImm32(SHORT(SHORT(instr.hint)), instr.src2)
-    ELSE
-     IF SHORT(SHORT(instr.hint)) # base THEN
-      OPO.GenMOV(SHORT(SHORT(instr.hint)), base)
+    ELSIF mode = RegReg THEN
+     IF SHORT(SHORT(instr.hint)) # memBase THEN
+      OPO.GenMOV(SHORT(SHORT(instr.hint)), memBase)
      END
+    ELSE
+     EmitLoad(SHORT(SHORT(instr.hint)), memBase, disp, size)
     END
   ELSE HALT(BUG)
   END;
@@ -1263,7 +1282,10 @@ MODULE OPL; (** non-portable *)
     END
    END;
    IF instr.op DIV 32 = GETreg THEN
-    OPO.GenMOV(SHORT(SHORT(instr.hint)), T0);
+    (* SYSTEM.GETREG(n, var): physical register n (instr.dest) ->
+       memory. The old code emitted GenMOV(reg, T0) which overwrote
+       the register with the variable's address. *)
+    EmitStore(SHORT(instr.dest), T0, 0, size);
     reg := none
    ELSIF ~loaded(instr.dest) & ((OPIR.Instr[instr.dest].op DIV 8) MOD 4 = ImmReg) THEN
     OPO.LoadImm32(T1, OPIR.Instr[instr.dest].src2);
@@ -1293,9 +1315,10 @@ MODULE OPL; (** non-portable *)
    memBase := T0
   END;
   IF instr.op DIV 32 = GETreg THEN
-   IF SHORT(SHORT(instr.hint)) # memBase THEN
-    OPO.GenMOV(SHORT(SHORT(instr.hint)), memBase)
-   END;
+   (* SYSTEM.GETREG(n, var): store the physical register (instr.dest)
+      into the variable's slot - not the address register into the
+      register (the old GenMOV went the wrong way and stored nothing). *)
+   EmitStore(SHORT(instr.dest), memBase, disp, size);
    reg := none
   ELSIF (memBase # T0) & ~loaded(instr.dest) & ((OPIR.Instr[instr.dest].op DIV 8) MOD 4 = ImmReg) THEN
    OPO.LoadImm32(T0, OPIR.Instr[instr.dest].src2);
@@ -2369,13 +2392,17 @@ MODULE OPL; (** non-portable *)
 
  PROCEDURE PopRegs(VAR instr: Instruction);
  (* Restore registers after a nested call *)
-  VAR i: SHORTINT; size: LONGINT; hasResult: BOOLEAN;
+  VAR i: SHORTINT; size: LONGINT; hasResult, isLReal: BOOLEAN;
  BEGIN
   DEC(nofSavedLevel);
   IF instr.hint # noHint THEN size := (instr.op MOD 8) * 8
   ELSE size := -1
   END;
   hasResult := size >= 0;
+  (* a LONGREAL result arrives as a soft-float GPR pair in a0:a1;
+     hint = useFReg marks a REAL/LONGREAL call result and ~IsSinglePrec
+     selects the LONGREAL (register pair) case *)
+  isLReal := hasResult & (instr.hint = useFReg) & ~IsSinglePrec(instr);
   (* Restore FPU registers in reverse order *)
   i := MaxFRegs - 1;
   WHILE i >= 0 DO
@@ -2387,9 +2414,12 @@ MODULE OPL; (** non-portable *)
    DEC(i)
   END;
   (* Restore GPRs in reverse order *)
-  (* If a0 needs to be restored AND call has a result in a0, we must save the result first *)
-  IF hasResult & (savedRegs[nofSavedLevel].reg[GPRToReg(A0)] # free) THEN
+  (* If a0 (or a1 for a LONGREAL pair) needs to be restored AND the call has a
+     result in a0(:a1), we must save the result first *)
+  IF hasResult & ((savedRegs[nofSavedLevel].reg[GPRToReg(A0)] # free) OR
+                  (isLReal & (savedRegs[nofSavedLevel].reg[GPRToReg(A1)] # free))) THEN
    OPO.GenMOV(T0, A0); (* save return value *)
+   IF isLReal THEN OPO.GenMOV(T1, A1) END; (* save hi word *)
    i := MaxGPRs - 1;
    WHILE i >= 0 DO
     IF savedRegs[nofSavedLevel].reg[i] # free THEN
@@ -2399,14 +2429,28 @@ MODULE OPL; (** non-portable *)
     DEC(i)
    END;
    (* Move old a0 to a free register *)
-   i := 1;
-   WHILE (i < MaxGPRs) & ~((savedRegs[nofSavedLevel].reg[i] = free) & ~(savedRegs[nofSavedLevel].reg[i] # free)) DO INC(i) END;
-   IF i < MaxGPRs THEN
-    OPO.GenMOV(RegToGPR(i), A0);
-    savedRegs[nofSavedLevel].reg[i] := savedRegs[nofSavedLevel].reg[GPRToReg(A0)]
+   IF savedRegs[nofSavedLevel].reg[GPRToReg(A0)] # free THEN
+    i := 1;
+    WHILE (i < MaxGPRs) & (savedRegs[nofSavedLevel].reg[i] # free) DO INC(i) END;
+    IF i < MaxGPRs THEN
+     OPO.GenMOV(RegToGPR(i), A0);
+     savedRegs[nofSavedLevel].reg[i] := savedRegs[nofSavedLevel].reg[GPRToReg(A0)]
+    END;
+    savedRegs[nofSavedLevel].reg[GPRToReg(A0)] := free
    END;
    OPO.GenMOV(A0, T0); (* restore return value *)
-   savedRegs[nofSavedLevel].reg[GPRToReg(A0)] := free
+   IF isLReal THEN
+    IF savedRegs[nofSavedLevel].reg[GPRToReg(A1)] # free THEN
+     i := 1;
+     WHILE (i < MaxGPRs) & (savedRegs[nofSavedLevel].reg[i] # free) DO INC(i) END;
+     IF i < MaxGPRs THEN
+      OPO.GenMOV(RegToGPR(i), A1);
+      savedRegs[nofSavedLevel].reg[i] := savedRegs[nofSavedLevel].reg[GPRToReg(A1)]
+     END;
+     savedRegs[nofSavedLevel].reg[GPRToReg(A1)] := free
+    END;
+    OPO.GenMOV(A1, T1) (* restore hi word *)
+   END
   ELSE
    i := MaxGPRs - 1;
    WHILE i >= 0 DO
@@ -2433,6 +2477,11 @@ MODULE OPL; (** non-portable *)
    AssignFreg(instr.dest);
    FindFreg(instr.dest, i);
    IF i # 0 THEN OPO.GenFSGNJS(i, 0, 0) END
+  ELSIF instr.hint = useFReg THEN
+   (* LONGREAL call result: soft-float register pair a0:a1 *)
+   regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0;
+   GetThisReg(A1);
+   SetLRealHi(A0, A1)
   ELSIF size = Bit8 THEN
    regTab[GPRToReg(A0)] := instr.dest; instr.reg := A0
   ELSIF (size = Bit16) OR (size = Bit32) THEN

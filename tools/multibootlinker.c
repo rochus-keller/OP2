@@ -1391,10 +1391,29 @@ static void rv32_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t l
             /* Small offset: chainVal * 4 = byte offset */
             nextlink = (int32_t)(chainVal * 4);
         }
-        /* JAL ra, offset: encode actual branch using J-type encoding */
-        int32_t offset = target - (codeImgBase + link);
-        uint32_t jal = 0x000000EFu | rv32_encode_j_imm(offset);
-        put_dword(code, link, (int32_t)jal);
+        if ((instr & 0x7F) == 0x37) {
+            /* LUI site: imported procedure *address* load (ldXProc).
+             * The compiler emits LUI rd,0 / ADDI rd,rd,-1 and chains the LUI
+             * into the same link-table chain as JAL call sites.  Patch the
+             * pair with the absolute procedure address (same as entry 254). */
+            uint32_t Rd = (instr >> 7) & 0x1F;
+            int32_t lo12 = ((int32_t)((uint32_t)target << 20)) >> 20;
+            uint32_t hi20 = ((uint32_t)target - (uint32_t)lo12) & 0xFFFFF000u;
+            put_dword(code, link, (int32_t)(hi20 | (Rd << 7) | 0x37));
+            put_dword(code, link + 4,
+                (int32_t)((((uint32_t)lo12 & 0xFFF) << 20) | (Rd << 15) | (Rd << 7) | 0x13));
+        } else if ((instr & 0x7F) == 0x6F) {
+            /* JAL ra, offset: encode actual branch using J-type encoding */
+            int32_t offset = target - (codeImgBase + link);
+            uint32_t jal = 0x000000EFu | rv32_encode_j_imm(offset);
+            put_dword(code, link, (int32_t)jal);
+        } else {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                "RV32 call-fixup chain: unexpected opcode 0x%02X at offset %d",
+                (unsigned)(instr & 0x7F), link);
+            halt_msg(buf);
+        }
         link = nextlink;
     }
 }
