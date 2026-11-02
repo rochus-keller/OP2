@@ -765,7 +765,7 @@ MODULE OPL; (** non-portable *)
    WHILE varConsTab[index].next # noEntry DO index := varConsTab[index].next END;
    varConsTab[index].next := nofVarConsLinks
   END;
-  varConsTab[nofVarConsLinks].offset := SHORT(offset);
+  varConsTab[nofVarConsLinks].offset := SHORT(offset DIV 4);  (* RV32: code offsets are word counts *)
   varConsTab[nofVarConsLinks].next := noEntry;
   INC(nofVarConsLinks)
  END VarConsLink;
@@ -825,16 +825,11 @@ MODULE OPL; (** non-portable *)
     (* First entry: encode -1 as sentinel (0xFFFFF = -1 in 20-bit) *)
     OPO.PutWordAt(offset, (old MOD 1000H) + 0FFFFF000H)
    ELSE
-    (* Chain: encode previous offset >> 2 *)
-    IF link[index].offset >= 8000H THEN
-     OPO.PutWordAt(offset, (old MOD 1000H) +
-      (((link[index].offset - 10000H) DIV 4) MOD 100000H) * 1000H)
-    ELSE
-     OPO.PutWordAt(offset, (old MOD 1000H) +
-      ((link[index].offset DIV 4) MOD 100000H) * 1000H)
-    END
+    (* Chain: encode previous WORD offset (link[].offset is a word count) *)
+    OPO.PutWordAt(offset, (old MOD 1000H) +
+     (LONG(link[index].offset) MOD 10000H) * 1000H)   (* unsigned 16-bit word count *)
    END;
-   link[index].offset := SHORT(offset)
+   link[index].offset := (offset DIV 4) MOD 10000H
   END
  END AddLink;
 
@@ -1644,11 +1639,25 @@ MODULE OPL; (** non-portable *)
   END;
   IF op = Cmp THEN
    (* CMP: store operands in T5, T6 for subsequent conditional branch *)
-   OPO.GenMOV(T5, reg);
-   IF mode = ImmReg THEN
-    OPO.LoadImm32(T6, instr.src2)
+   IF (size = Bit16) OR (size = Bit8) THEN
+    IF size = Bit16 THEN disp := 16 ELSE disp := 24 END;  (* shift amount *)
+    OPO.GenSLLI(T5, reg, disp); OPO.GenSRAI(T5, T5, disp);
+    IF mode = ImmReg THEN
+     op := instr.src2;
+     IF size = Bit16 THEN op := op MOD 10000H; IF op >= 8000H THEN DEC(op, 10000H) END
+     ELSE op := op MOD 100H; IF op >= 80H THEN DEC(op, 100H) END
+     END;
+     OPO.LoadImm32(T6, op)
+    ELSE
+     OPO.GenSLLI(T6, base, disp); OPO.GenSRAI(T6, T6, disp)
+    END
    ELSE
-    OPO.GenMOV(T6, base)
+    OPO.GenMOV(T5, reg);
+    IF mode = ImmReg THEN
+     OPO.LoadImm32(T6, instr.src2)
+    ELSE
+     OPO.GenMOV(T6, base)
+    END
    END
   ELSIF op = Test THEN
    (* TEST: T5 = reg AND imm/base, T6 = 0 *)
@@ -2578,9 +2587,7 @@ MODULE OPL; (** non-portable *)
    IF proc.mode IN {TProc, Typ} THEN entryNr := proc.adr MOD 10000H
    ELSE entryNr := proc.adr
    END;
-   IF OPO.pc > 32767 THEN entry[entryNr] := SHORT(OPO.pc - 65536)
-   ELSE entry[entryNr] := SHORT(OPO.pc)
-   END
+   entry[entryNr] := SHORT(OPO.pc DIV 4)
   END
  END FixupLocalProcCall;
 
@@ -3142,7 +3149,7 @@ MODULE OPL; (** non-portable *)
   OPM.ObjWInt(SHORT(nofptrs)); OPM.ObjWInt(nofrecs);
   OPM.ObjWInt(nofImp);
   OPM.ObjWInt(nofVarCons); OPM.ObjWInt(nofLinks - linkCorrection);
-  OPM.ObjWBytes(OPO.dsize, 4); OPM.ObjWInt(SHORT(OPO.csize)); OPM.ObjWInt(SHORT(OPO.pc));
+  OPM.ObjWBytes(OPO.dsize, 4); OPM.ObjWInt(SHORT(OPO.csize)); OPM.ObjWInt(SHORT(OPO.pc DIV 4));
   WriteName(modName);
   OPM.ObjW(EntryTag);
   i := 0; WHILE i < nofEntries DO OPM.ObjWInt(entry[i]); INC(i) END;

@@ -1373,8 +1373,7 @@ static void rv32_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t l
      * bits [31:12] of the JAL instruction (NOT J-type encoded).
      * Chain values:
      *   0xFFFFF = sentinel (end of chain)
-     *   < 0x80000 = small offset: byte_offset = chainVal * 4
-     *   >= 0x80000 = large offset: sign-extend 20-bit, byte_offset = signed * 4 + 0x10000 */
+     *   else = word offset (code offsets are word counts): byte_offset = chainVal * 4 */
     while (link >= 0) {
         uint32_t instr = (uint32_t)get_dword(code, link);
         /* Extract raw 20-bit chain value from bits [31:12] */
@@ -1383,12 +1382,8 @@ static void rv32_PatchFunctionCall(uint8_t *code, int32_t codeImgBase, int32_t l
         if (chainVal == 0xFFFFF) {
             /* Sentinel: end of chain */
             nextlink = -1;
-        } else if (chainVal >= 0x80000) {
-            /* Large offset: sign-extend 20-bit and decode */
-            int32_t signed20 = (int32_t)(chainVal | 0xFFF00000u);
-            nextlink = signed20 * 4 + 0x10000;
         } else {
-            /* Small offset: chainVal * 4 = byte offset */
+            /* Word offset (link[].offset is a word count): byte offset = *4 */
             nextlink = (int32_t)(chainVal * 4);
         }
         if ((instr & 0x7F) == 0x37) {
@@ -1719,8 +1714,7 @@ static void fixup_links(Module *m, LinkEntry *linkTab, int32_t nofLinks, DataLin
                         /* Same link extraction as rv32_PatchFunctionCall */
                         uint32_t chainVal = (instr1 >> 12) & 0xFFFFF;
                         if (chainVal == 0xFFFFF) nextlink = -1;
-                        else if (chainVal >= 0x80000) nextlink = ((int32_t)(chainVal | 0xFFF00000u)) * 4 + 0x10000;
-                        else nextlink = chainVal * 4;
+                        else nextlink = chainVal * 4;  /* word offset -> byte offset */
 
                         /* Extract entry index from ADDI immediate (bits 31:20) */
                         uint32_t instr2 = (uint32_t)get_dword(codebase, link + 4);
@@ -2013,7 +2007,7 @@ static void read_header(FILE *f, Module *m, int16_t *nofDataLinks, int16_t *nofL
     m->dataSize = read_i32_le(f);
     m->conSize = (int32_t)read_i16_le(f);
     m->codeSize = (int32_t)read_u16_le(f);
-    if (arch == &arch_arm32) m->codeSize *= 4;  /* ARM32: stored as word count */
+    if (arch == &arch_arm32 || arch == &arch_rv32) m->codeSize *= 4;  /* ARM32/RV32: stored as word count */
     read_string(f, m->name, sizeof(m->name));
 
     if (Trace) {
@@ -2041,7 +2035,7 @@ static void read_entry(FILE *f, Module *m) {
     expect_tag(f, 0x82, m->name);
     for (int32_t i = 0; i < m->nofEntries; i++) {
         m->entries[i] = (uint32_t)read_u16_le(f);
-        if (arch == &arch_arm32) m->entries[i] *= 4;  /* ARM32: stored as word count */
+        if (arch == &arch_arm32 || arch == &arch_rv32) m->entries[i] *= 4;  
     }
 }
 
@@ -2055,7 +2049,7 @@ static void read_cmd(FILE *f, Module *m) {
     for (int32_t i = 0; i < m->nofCmds; i++) {
         read_string(f, m->cmds[i].name, sizeof(m->cmds[i].name));
         m->cmds[i].adr = (int32_t)read_u16_le(f);
-        if (arch == &arch_arm32) m->cmds[i].adr *= 4;  /* ARM32: stored as word count */
+        if (arch == &arch_arm32 || arch == &arch_rv32) m->cmds[i].adr *= 4; 
     }
 }
 
@@ -2108,7 +2102,7 @@ static DataLinkEntry *read_data_links(FILE *f, Module *m, int16_t nofDataLinks) 
                 halt_msg("out of memory (dataLinks offsets)");
             for (int16_t j = 0; j < dataLinks[i].nofFixups; j++) {
                 dataLinks[i].offset[j] = read_u16_le(f);
-                if (arch == &arch_arm32) dataLinks[i].offset[j] *= 4;  /* ARM32: stored as word count */
+                if (arch == &arch_arm32 || arch == &arch_rv32) dataLinks[i].offset[j] *= 4;  
             }
         }
     }
@@ -2128,7 +2122,7 @@ static LinkEntry *read_links(FILE *f, Module *m, int16_t nofLinks) {
         links[i].link = read_u16_le(f);
         /* ARM32: link offsets stored as word count (÷4), except case table (entry 255)
            which stores constant-pool byte offsets */
-        if (arch == &arch_arm32 && links[i].entry != 255)
+        if ((arch == &arch_arm32 || arch == &arch_rv32) && links[i].entry != 255)
             links[i].link *= 4;
     }
     return links;
@@ -2298,7 +2292,7 @@ static void check_scope(FILE *f, ExportDesc *scope, int level, Module *M, Module
                 } else {
                     int32_t codeLink = link - (int32_t)EUProcFlag;
                     int32_t procAdr = scope->dsc[i].adr;
-                    if (arch == &arch_arm32) { codeLink *= 4; procAdr *= 4; }  /* ARM32: stored as word count */
+                    if (arch == &arch_arm32 || arch == &arch_rv32) { codeLink *= 4; procAdr *= 4; }  
                     fixup_call_for_use(M, codeLink, procAdr + mod->codeBase);
                 }
             }

@@ -46,7 +46,7 @@ MODULE OPO;
   Imme*  = ImmReg;
 
  (* code and data length per module *)
-  CodeLength*  = 65000;
+  CodeLength*  = 262140;  (* 65535 words * 4; code offsets are u16 word counts *)
   MaxConstLength* = 64*1024;
 
  (* RV32 GPR numbers (x0..x31) *)

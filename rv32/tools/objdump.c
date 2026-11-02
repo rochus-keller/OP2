@@ -68,7 +68,7 @@ static FILE *f;
 static int verbose = 0;
 
 /* Entry table for procedure boundary markers */
-static int16_t entry_offsets[MAX_ENTRIES];
+static int32_t entry_offsets[MAX_ENTRIES];
 static int nof_entries_stored = 0;
 
 /* Instruction statistics */
@@ -682,7 +682,8 @@ int main(int argc, char **argv) {
     int16_t nofLinks = read_int16();
     int32_t dataSize = read_int32();
     int16_t constSize = read_int16();
-    uint16_t codeSize = read_uint16();
+    uint16_t codeSize_raw = read_uint16();
+    uint32_t codeSize = (uint32_t)codeSize_raw * 4;  /* RV32: stored as word count */
     char modName[256];
     read_string(modName, sizeof(modName));
 
@@ -705,7 +706,7 @@ int main(int argc, char **argv) {
     printf("\n--- Entries ---\n");
     nof_entries_stored = 0;
     for (int i = 0; i < nofEntries; i++) {
-        int16_t entry = read_int16();
+        int32_t entry = (int32_t)read_int16() * 4;
         printf("  [%d] offset=%d (0x%x)\n", i, entry, (unsigned)entry);
         if (nof_entries_stored < MAX_ENTRIES)
             entry_offsets[nof_entries_stored++] = entry;
@@ -732,7 +733,7 @@ int main(int argc, char **argv) {
                 name[j] = 0;
             }
         }
-        int16_t entry = read_int16();
+        int32_t entry = (int32_t)read_int16() * 4;
         printf("  %s%s  entry=%d (0x%x)\n", has_param ? "$" : "", name, entry, (unsigned)entry);
     }
 
@@ -762,7 +763,7 @@ int main(int argc, char **argv) {
         int16_t nofFixups = read_int16();
         printf("  mod=%d entry=%d nofFixups=%d:", mod, entry, nofFixups);
         for (int j = 0; j < nofFixups; j++) {
-            int16_t offset = read_int16();
+            int32_t offset = (int32_t)read_int16() * 4;
             printf(" %d(0x%x)", offset, (unsigned)(uint16_t)offset);
         }
         printf("\n");
